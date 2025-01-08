@@ -1,8 +1,8 @@
 # Python cache files
 /models/*
 /data/*
+/results/*
 __pycache__/
 */__pycache__/
 */*/__pycache__/
 *.py[cod]
-*.npz
