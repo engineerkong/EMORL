@@ -152,13 +152,13 @@ class Multi:
             self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.experiment = experiment
         if self.type =="perplexity":
-            self.model = GPT2LMHeadModel.from_pretrained('/home/ubuntu/test/openai-community-gpt2')
-            self.tokenizer = GPT2Tokenizer.from_pretrained('/home/ubuntu/test/openai-community-gpt2')
+            self.model = GPT2LMHeadModel.from_pretrained('models/openai-community-gpt2')
+            self.tokenizer = GPT2Tokenizer.from_pretrained('models/openai-community-gpt2')
             self.model.to(self.device)
             self.metric = partial(score_perplexity, model=self.model, tokenizer=self.tokenizer)
-        elif self.type =="perplexity_rl":
-            self.model = GPT2LMHeadModel.from_pretrained('gpt2')
-            self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+        elif self.type =="fluency":
+            self.model = GPT2LMHeadModel.from_pretrained('models/openai-community-gpt2')
+            self.tokenizer = GPT2Tokenizer.from_pretrained('models/openai-community-gpt2')
             self.model.to(self.device)
             metric = partial(score_perplexity, model=self.model, tokenizer=self.tokenizer)
             def new_metric(x, y):

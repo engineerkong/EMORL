@@ -154,4 +154,4 @@ def run_rl_train(
 if __name__ == "__main__":
     
     wandb.init(project="dynamic weighting", mode="disabled")
-    run_rl_train(model_path="/home/ubuntu/test/google-t5-t5-base", data_path="/home/ubuntu/test/pair_data/pair_data.csv")
+    run_rl_train(model_path="/home/ubuntu/DynaDRL/models/google-t5-t5-base", data_path="/home/ubuntu/DynaDRL/data/pair_data/pair_data.csv")
