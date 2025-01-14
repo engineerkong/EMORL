@@ -29,6 +29,7 @@ def aggregation(args):
         - test_history_size (int): Size of history to maintain for evaluation
         - num_runs (int): Number of evaluation runs
         - num_steps (int): Number of steps per evaluation run
+        - do_wandb (bool)
 
     Returns:
         torch.nn.Module: The model with aggregated parameters from multiple LoRA checkpoints
@@ -41,7 +42,10 @@ def aggregation(args):
     # Load seed, device and wandb
     set_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    wandb.init(project="DynaDRL", mode="disabled")
+    if do_wandb:
+        wandb.init(project="DynaDRL", name=f"DL_TRAINING_{timestamp}")
+    else:
+        wandb.init(project="DynaDRL", mode="disabled")
 
     # Load data
     train_data, val_data, test_data = get_data(args.data_path)
@@ -207,6 +211,7 @@ def main():
     parser.add_argument('--test_history_size', type=int, default=10)
     parser.add_argument('--num_runs', type=int, default=10)
     parser.add_argument('--num_steps', type=int, default=1000)
+    parser.add_argument('--do_wandb', type=bool, default=False)
     save_args(args, "DL_AGGREGATION", "logs/")
     
     args = parser.parse_args()

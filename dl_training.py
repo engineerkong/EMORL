@@ -24,13 +24,14 @@ def training(args):
         - model_path (str): Path to the pre-trained T5 base model
         - data_path (str): Path to training data CSV file containing input-output pairs
         - lora_path (str): Directory to save trained LoRA parameters
-        - objectives (list[str]):List of objectives to train LoRA models for. Each objective 
+        - objectives (list):List of objectives to train LoRA models for. Each objective 
           will have its own LoRA model trained
         - train_batch_size (int): Batch size for training
         - val_batch_size (int): Batch size for validation
         - val_interval_size (int): Number of training steps between validation checks
         - num_runs (int): Number of training runs to perform
         - num_steps (int): Number of training steps per run
+        - do_wandb (bool)
 
     Returns:
         dict: Dictionary containing trained LoRA parameters for each objective
@@ -39,11 +40,15 @@ def training(args):
         args = parser.parse_args()
         model = training(args)
    """
-   
+
     # Load seed, device and wandb
     set_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    wandb.init(project="DynaDRL", mode="disabled")
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    if do_wandb:
+        wandb.init(project="DynaDRL", name=f"DL_TRAINING_{timestamp}")
+    else:
+        wandb.init(project="DynaDRL", mode="disabled")
 
     # Load data
     train_data, val_data, test_data = get_data(args.data_path)
@@ -211,6 +216,7 @@ def main():
     parser.add_argument('--val_interval_size', type=int, default=10)
     parser.add_argument('--num_runs', type=int, default=10)
     parser.add_argument('--num_steps', type=int, default=1000)
+    parser.add_argument('--do_wandb', type=bool, default=False)
     save_args(args, "DL_TRAINING", "logs/")
 
     args = parser.parse_args()
