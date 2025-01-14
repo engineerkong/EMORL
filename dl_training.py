@@ -41,14 +41,11 @@ def training(args):
         model = training(args)
    """
 
-    # Load seed, device and wandb
+    # Load seed, device
     set_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    if do_wandb:
-        wandb.init(project="DynaDRL", name=f"DL_TRAINING_{timestamp}")
-    else:
-        wandb.init(project="DynaDRL", mode="disabled")
+
 
     # Load data
     train_data, val_data, test_data = get_data(args.data_path)
@@ -61,6 +58,13 @@ def training(args):
     for objective in args.objectives:
         print(f"Start training for objective:{objective}")
         
+        # Initialize wandb
+        if args.do_wandb:
+            wandb.init(project="DynaDRL", name=f"DL_TRAINING_{objective}_{timestamp}")
+            wandb.define_metric("mean_reward", step_metric="data_consuming")
+        else:
+            wandb.init(project="DynaDRL", mode="disabled")
+
         # Load models
         model, tokenizer = get_model(
             args.model_path,  
@@ -103,6 +107,7 @@ def training(args):
 
         # Training loop
         step_count = 0
+        rewards_history = []
         while step_count < args.num_steps:
             print(f"step_count:{step_count}")
             
@@ -191,7 +196,14 @@ def training(args):
                         for k,v in scorer_returns.items():
                             if k in current_scores:
                                 current_scores[k].extend(v)
-                    print("Mean Rewards", [ np.mean(v) for k,v in current_scores.items() ])
+                    # Record mean reward (in single objective) and check if converged
+                    mean_reward = [ np.mean(v) for k,v in current_scores.items() ]
+                    rewards_history.append(mean_reward[0])
+                    print("Mean Rewards", mean_reward[0])
+                    wandb.log({"mean_reward": mean_reward[0], "data_consuming": step_count*args.train_batch_size})
+                    if slope_convergence(rewards_history):
+                        print("Training converged!")
+                        print(f"Data consuming:{step_count*args.train_batch_size}")
 
         lora_params = acquire_lora_params(model)
         
@@ -203,6 +215,9 @@ def training(args):
         npz_path = os.path.join(save_dir, filename)
         save_lora(lora_params, npz_path=npz_path)
         print(f"Saved LORA parameters to {npz_path}")
+
+        # Finish wandb
+        wandb.finish()
     
 def main():
     parser = argparse.ArgumentParser()
@@ -217,9 +232,9 @@ def main():
     parser.add_argument('--num_runs', type=int, default=10)
     parser.add_argument('--num_steps', type=int, default=1000)
     parser.add_argument('--do_wandb', type=bool, default=False)
-    save_args(args, "DL_TRAINING", "logs/")
-
+    
     args = parser.parse_args()
+    save_args(args, "DL_TRAINING", "logs/")
 
     # Run single objective training
     training(args)

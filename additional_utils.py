@@ -4,6 +4,9 @@ import torch
 import os
 import json
 import csv
+from scipy import stats
+import time
+import os
 from itertools import combinations, product
 from typing import List, Dict
 from typing import Optional, List, Dict, Tuple
@@ -19,7 +22,6 @@ def set_seed(seed: int = 42) -> None:
     torch.backends.cudnn.benchmark = False
     os.environ["PYTHONHASHSEED"] = str(seed)
     print(f"Random seed set as {seed}")
-
 
 # TODO: use QLORA
 def get_model(model_path: str, max_seq_length: int = 90, lora = False, max_output_length: int = 90):
@@ -102,6 +104,27 @@ def save_args(args, func_name, save_dir):
        for arg, value in vars(args).items():
            f.write(f"{arg}: {value}\n")
    print(f"Saved arguments to {filename}")
+
+def check_convergence(rewards, window_size=100, std_threshold=0.1):
+    if len(rewards) < window_size:
+        return False
+        
+    recent_rewards = rewards[-window_size:]
+    std = np.std(recent_rewards)
+    mean = np.mean(recent_rewards)
+    
+    cv = std / mean
+    return cv < std_threshold
+
+def slope_convergence(rewards, window_size=100, slope_threshold=0.001):
+    if len(rewards) < window_size:
+        return False
+        
+    recent_rewards = rewards[-window_size:]
+    x = np.arange(window_size)
+    slope, _, _, _, _ = stats.linregress(x, recent_rewards)
+    
+    return abs(slope) < slope_threshold
 
 # TODO: should it not be 2-1,1-0,2-0?
 def generate_combs_pair(dic, balanced_sampling=False):
