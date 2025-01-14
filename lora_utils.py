@@ -59,16 +59,36 @@ def save_lora(lora_params, npz_path):
     np.savez(npz_path, 
         **{f"{name}_{param_name}": param 
         for name in lora_params 
-        for param_name, param in zip(['lora_A', 'lora_B', 'scaling'], lora_params[name])})
+        for param_name, param in zip(['loraA', 'loraB', 'scaling'], lora_params[name])})
 
 
 def load_lora(npz_path):
     loaded = np.load(npz_path)
     lora_params = {}
-    for name in set(k.split('_lora')[0] for k in loaded.keys()):
-        lora_params[name] = [
-            loaded[f"{name}_lora_A"],
-            loaded[f"{name}_lora_B"],
-            loaded[f"{name}_scaling"]
-        ]
+
+    for key in loaded.keys():
+        name, param_type = key.rsplit('_', 1)
+        
+        if name not in lora_params:
+            lora_params[name] = [None, None, None]
+            
+        if param_type == 'loraA':
+            lora_params[name][0] = loaded[key]
+        elif param_type == 'loraB':
+            lora_params[name][1] = loaded[key]
+        elif param_type == 'scaling':
+            lora_params[name][2] = loaded[key]
+    
     return lora_params
+
+def adjust_weights(weights, key, all_lora_params):
+    key_exists = [key in lora.keys() for lora in all_lora_params]
+    if all(key_exists):
+        return weights
+    valid_indices = [i for i, exists in enumerate(key_exists) if exists]
+    sum_valid_weights = sum(weights[i] for i in valid_indices)
+    
+    return [
+        (weights[i] / sum_valid_weights if exists else 0.0)
+        for i, exists in enumerate(key_exists)
+    ]

@@ -1,7 +1,9 @@
 # Python cache files
 /models/*
 /data/*
-/results/*
+/weights/*
+/lora_results/*
+/aggregation_results/*
 __pycache__/
 */__pycache__/
 */*/__pycache__/

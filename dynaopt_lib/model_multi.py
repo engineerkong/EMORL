@@ -152,8 +152,8 @@ class Multi:
             self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.experiment = experiment
         if self.type =="perplexity":
-            self.model = GPT2LMHeadModel.from_pretrained('models/openai-community-gpt2')
-            self.tokenizer = GPT2Tokenizer.from_pretrained('models/openai-community-gpt2')
+            self.model = GPT2LMHeadModel.from_pretrained('gpt2')
+            self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
             self.model.to(self.device)
             self.metric = partial(score_perplexity, model=self.model, tokenizer=self.tokenizer)
         elif self.type =="fluency":
@@ -167,8 +167,8 @@ class Multi:
                 return [(CAP-r)/CAP for r in result]
             self.metric = new_metric
         elif self.type == "coherence":
-            self.model = BertForSequenceClassification.from_pretrained(f'models/{experiment}/coherence')
-            self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+            self.model = BertForSequenceClassification.from_pretrained('models/google-bert-bert-base-uncased')
+            self.tokenizer = BertTokenizer.from_pretrained('models/google-bert-bert-base-uncased')
             self.model.to(self.device)
             self.metric = partial(score_coherence, model=self.model, tokenizer=self.tokenizer)
         elif self.type == "specificity":

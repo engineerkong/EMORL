@@ -83,6 +83,26 @@ def read_umich_pair(data_path: str, balanced_sampling=False):
         res_data += pair_dat
     return res_data
 
+def collate_fn(batch):
+    prompts = [item["prompt"] + " [SEP] " for item in batch]
+    responses = [item["response"] for item in batch]
+    return {"prompts": prompts, "responses": responses}
+    
+def save_args(args, func_name, save_dir):
+   # Create timestamp for filename
+   timestamp = time.strftime("%Y%m%d_%H%M%S")
+   # Create directory if it doesn't exist
+   os.makedirs(save_dir, exist_ok=True)
+   # Create filename with timestamp
+   filename = os.path.join(save_dir, f"args_{timestamp}.txt")
+   # Save arguments to file
+   with open(filename, 'w') as f:
+       f.write(f"Command Line Arguments for {func_name}:\n")
+       f.write("----------------------\n")
+       for arg, value in vars(args).items():
+           f.write(f"{arg}: {value}\n")
+   print(f"Saved arguments to {filename}")
+
 # TODO: should it not be 2-1,1-0,2-0?
 def generate_combs_pair(dic, balanced_sampling=False):
     prompt = [dic["prompt"]]    

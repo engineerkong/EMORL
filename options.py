@@ -23,15 +23,16 @@ def args_parser():
     parser.add_argument('--seed', type=int, default=429023)
     parser.add_argument('--data_path', type=str, default="data/pair_data/pair_data.csv")
     parser.add_argument('--model_path', type=str, default="models/google-t5-t5-base")
-    parser.add_argument('--objectives', nargs='+', default=["reflection", "coherency", "fluency"])
-    parser.add_argument('--train_batch_size', type=int, default=1)
-    parser.add_argument('--val_batch_size', type=int, default=1)
+    parser.add_argument('--objectives', nargs='+', default=["reflection", "coherence", "fluency"])
+    parser.add_argument('--train_batch_size', type=int, default=10)
+    parser.add_argument('--val_batch_size', type=int, default=10)
+    parser.add_argument('--test_batch_size', type=int, default=10)    
+    parser.add_argument('--test_history_size', type=int, default=10)
     parser.add_argument('--num_runs', type=int, default=10)
     parser.add_argument('--num_steps', type=int, default=1000)
-    parser.add_argument('--save_lora_path', type=str, default="results/lora1.npz")
+    parser.add_argument('--lora_path', type=str, default="results/")
 
     # dl_aggregation
-    parser.add_argument('--load_lora_path', type=str, default="results/lora1.npz")
 
 
     
