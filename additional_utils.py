@@ -116,7 +116,7 @@ def check_convergence(rewards, window_size=100, std_threshold=0.1):
     cv = std / mean
     return cv < std_threshold
 
-def slope_convergence(rewards, window_size=100, slope_threshold=0.001):
+def slope_convergence(rewards, window_size=100, slope_threshold=0.01):
     if len(rewards) < window_size:
         return False
         
