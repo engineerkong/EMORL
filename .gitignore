@@ -4,6 +4,7 @@
 /weights/*
 /lora_results/*
 /aggregation_results/*
+/experiment_results/*
 /wandb/*
 /logs/*
 __pycache__/

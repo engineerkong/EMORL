@@ -16,15 +16,15 @@ def dynaopt(
     seed: int = 321232,
     model_path: str = "models/google-t5-t5-base",
     data_path: str = "data/pair_data/pair_data.csv",
-    max_seq_length: int = 128,
-    max_output_length: int = 64, 
+    experiment_path: str = "experiment_results/",
     train_batch_size: int = 8,
     val_batch_size: int = 8,
     val_interval_size: int = 8,
+    val_history_size: int = 10,
     num_runs: int = 10, 
     num_steps: int = 5000,
     do_wandb: bool = False
-    )
+    ):
     """
     Implements dynamic optimization for RL reward modeling, based on the DynaOpt framework.
 
@@ -52,10 +52,10 @@ def dynaopt(
     timestamp = time.strftime("%Y%m%d_%H%M%S")
 
     # Load data
-    train_data, dev_data, test_data = get_data(data_path)
-    train_dataloader = DataLoader(dataset=train_data, batch_size=args.train_batch_size,\
+    train_data, val_data, test_data = get_data(data_path)
+    train_dataloader = DataLoader(dataset=train_data, batch_size=train_batch_size,\
         sampler=RandomSampler(train_data), drop_last=True, collate_fn=collate_fn)
-    val_dataloader = DataLoader(dataset=val_data, batch_size=args.val_batch_size,\
+    val_dataloader = DataLoader(dataset=val_data, batch_size=val_batch_size,\
         sampler=SequentialSampler(val_data), drop_last=True, collate_fn=collate_fn)
 
     # Initialize wandb
@@ -67,7 +67,7 @@ def dynaopt(
 
     # Load models
     model, tokenizer = get_model(
-        args.model_path,  
+        model_path,  
         max_seq_length=128,
         max_output_length=64,
         lora=False
@@ -122,7 +122,7 @@ def dynaopt(
     # Training loop
     step_count = 0
     rewards_history = []
-    while step_count < args.num_steps:
+    while step_count < num_steps:
         print(f"step_count:{step_count}")
         
         # Training on train dataset
@@ -152,8 +152,8 @@ def dynaopt(
             generateds = [g.replace("[CLS]", "").strip() for g in generateds]
             gens_out = tokenizer.batch_encode_plus(cls_generateds, max_length=128, \
                 return_tensors="pt", padding="longest", truncation=True)["input_ids"]  
-            prompts = [p for p in prompts for _ in range(args.num_runs)]
-            responses = [r for r in responses for _ in range(args.num_runs)]
+            prompts = [p for p in prompts for _ in range(num_runs)]
+            responses = [r for r in responses for _ in range(num_runs)]
 
             # Calculate scorers - kSCST
             scorer_returns = scorer.score(prompts, generateds, responses=responses, step_count=step_count, bandit=bandit, chosen=chosen)
@@ -162,7 +162,7 @@ def dynaopt(
             batch_scores = total_scores.reshape(train_batch_size, num_runs)
             mean_scores = batch_scores.mean(dim=1)
             max_scores = torch.max(batch_scores, dim=1).values 
-            unlooped_mean_scores = torch.repeat_interleave(mean_scores, num_epochs)
+            unlooped_mean_scores = torch.repeat_interleave(mean_scores, num_runs)
             normalized_rewards = (unlooped_mean_scores - total_scores)
             n_diff_pos, n_diff_neg = (normalized_rewards<-0.02).long().sum().item(), (normalized_rewards>0.02).long().sum().item()
 
@@ -182,7 +182,9 @@ def dynaopt(
 
             # Validation model with val dataset and show the mean rewards
             current_scores = { k["name"]+"_scores":[] for k in scorer.scorers }
-            if step_count !=0 and  step_count % args.val_interval_size == 0:
+            if step_count !=0 and  step_count % val_interval_size == 0:
+                
+                # Generate outputs with given prompts from val dataset
                 for batch in val_dataloader:
                     responses = batch["responses"]
                     prompts = batch["prompts"]
@@ -205,12 +207,24 @@ def dynaopt(
                     generateds = [ " ".join(g) for g in generateds]
                     generateds = [ g.replace("<pad>", "").strip() for g in generateds]
                     generateds = [g.replace("[CLS]", "").strip() for g in generateds]
-                    prompts = [p for p in prompts for _ in range(args.num_runs)]
-                    responses = [r for r in responses for _ in range(args.num_runs)]
+                    prompts = [p for p in prompts for _ in range(num_runs)]
+                    responses = [r for r in responses for _ in range(num_runs)]
+                    
+                    # Calculate scores
                     scorer_returns = scorer.rl_score(prompts, generateds, responses=responses, step_count=step_count, bandit=None)
                     for k,v in scorer_returns.items():
                         if k in current_scores:
                             current_scores[k].extend(v)
+                print("Mean Rewards", [ np.mean(v) for k,v in current_scores.items() ])
+                scaled = []
+                for k,v in rl_scorer_history.items():
+                    HISTORY_SIZE = val_history_size
+                    history = v[-HISTORY_SIZE:]
+                    if history == []:
+                        scaled.append(0.0)
+                    else:
+                        scaled.append(np.mean(current_scores[k])-np.mean(history))
+                print("Mean Scaled Rewards", scaled)
 
                 # Return scores back to update bandit weights
                 bandit(np.mean(scaled), last_chosen) 
@@ -228,24 +242,23 @@ def dynaopt(
                 for k,v in current_scores.items():
                     rl_scorer_history[k].extend(v)
 
-                # Record mean reward (in single objective) and check if converged
-                mean_reward = [ np.mean(v) for k,v in current_scores.items() ]
-                rewards_history.append(mean_reward[0])
-                print("Mean Rewards", mean_reward[0])
-                wandb.log({"mean_reward": mean_reward[0], "data_consuming": step_count*args.train_batch_size})
+                # Record mean reward and check if converged
+                mean_reward = np.mean([ np.mean(v) for k,v in current_scores.items() ])
+                rewards_history.append(mean_reward)
+                wandb.log({"mean_reward": mean_reward, "data_consuming": step_count*train_batch_size})
                 if slope_convergence(rewards_history):
                     print("Training converged!")
-                    print(f"Data consuming:{step_count*args.train_batch_size}")
+                    print(f"Data consuming:{step_count*train_batch_size}")
             
-    # Save aggregated model
+    # Save experiment model
     os.makedirs(experiment_path, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     filename = f"experiment_model_dynaopt_{timestamp}.pt"
     save_path = os.path.join(experiment_path, filename)
     torch.save(model.state_dict(), save_path)
-    print(f"Saved aggregated model to {save_path}")
+    print(f"Saved experiment model to {save_path}")
 
     return model
 
 if __name__ == "__main__":
-    model = dynaopt()
+    model = dynaopt(train_batch_size = 2, val_batch_size = 2, val_interval_size = 8, num_runs = 10, num_steps = 5000, do_wandb = True)
