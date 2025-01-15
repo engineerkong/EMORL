@@ -42,8 +42,12 @@ def aggregation(args):
     # Load seed, device and wandb
     set_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    if do_wandb:
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+
+    # Initialize wandb
+    if args.do_wandb:
         wandb.init(project="DynaDRL", group="DL_AGGREGATION", name=f"aggregation_{timestamp}")
+        wandb.define_metric("mean_reward", step_metric="data_consuming")
     else:
         wandb.init(project="DynaDRL", mode="disabled")
 
@@ -63,18 +67,51 @@ def aggregation(args):
     model.to(device)
     model.eval()
 
-    # Load lora params for all objectives
-    all_lora_params = []
-    all_lora_keys = []
-    for objective in args.objectives:
-        lora_params = load_lora(args.lora_path+"lora_"+objective+".npz")
-        for key in lora_params.keys():
-            if key not in all_lora_keys:
-                assert key.startswith('base_model.model.'), f"Key {key} does not start with 'base_model.model.'"
-                start_idx = len('base_model.model.')
-                suffix = key[start_idx:]
-                all_lora_keys.append(suffix)
-        all_lora_params.append(lora_params)
+    # # Load lora params for all objectives
+    # all_lora_params = []
+    # all_lora_keys = []
+    # for objective in ["reflection", "fluency"]:
+    #     lora_params = load_lora(args.lora_path+"lora_"+objective+".npz")
+    #     for key in lora_params.keys():
+    #         if key not in all_lora_keys:
+    #             assert key.startswith('base_model.model.'), f"Key {key} does not start with 'base_model.model.'"
+    #             start_idx = len('base_model.model.')
+    #             suffix = key[start_idx:]
+    #             all_lora_keys.append(suffix)
+    #     all_lora_params.append(lora_params)
+    
+    # for k in all_lora_keys:
+    #     # adapted_weights = adjust_weights(weights, k, all_lora_params)
+    #     for i, (w, lora) in enumerate(zip(adapted_weights, all_lora_params)):
+    #         if i==0:
+    #             original_params[k] = original_params[k] + (lora[k][1] @ lora[k][0]) * lora[k][2] * w
+
+    # test model with one trained lora
+
+    lora_reflection_params = load_lora(args.lora_path+"lora_reflection.npz")
+    lora_reflection_keys = lora_reflection_params.keys()
+    for key in lora_reflection_keys:
+        start_idx = len('base_model.model.')
+        k = key[start_idx:] + '.weight'
+        original_params[k] = original_params[k] + (lora_reflection_params[key][1] @ lora_reflection_params[key][0]) * lora_reflection_params[key][2] * 0.8
+
+    lora_fluency_params = load_lora(args.lora_path+"lora_fluency.npz")
+    lora_fluency_keys = lora_fluency_params.keys()
+    for key in lora_fluency_keys:
+        start_idx = len('base_model.model.')
+        k = key[start_idx:] + '.weight'
+        original_params[k] = original_params[k] + (lora_fluency_params[key][1] @ lora_fluency_params[key][0]) * lora_fluency_params[key][2] * 0.2
+    
+    # lora_params = load_lora(args.lora_path+"lora_coherence.npz")
+    # lora_keys = lora_params.keys()
+    # print(f"number of coherence lora layers change:{len(lora_keys)}")
+    # for key in lora_keys:
+    #     start_idx = len('base_model.model.')
+    #     k = key[start_idx:] + '.weight'
+    #     original_params[k] = original_params[k] + (lora_params[key][1] @ lora_params[key][0]) * lora_params[key][2]
+
+    # updated_params = original_params
+    # model.load_state_dict(updated_params)
 
     # Define generation parameters
     gen_params = {
@@ -112,6 +149,7 @@ def aggregation(args):
 
     # Dynamic weighting loop
     step_count = 0
+    rewards_history = []
     while step_count < args.num_steps:
 
         # Dynamic weighting on test dataset
@@ -145,7 +183,6 @@ def aggregation(args):
 
             # Calculate scores
             scorer_returns = scorer.rl_score(prompts, generateds, responses=responses, step_count=step_count, bandit=bandit)
-            print(scorer_returns.keys())
             for k,v in scorer_returns.items():
                 if k in current_scores:
                     current_scores[k].extend(v)
@@ -179,14 +216,22 @@ def aggregation(args):
         print(f"LORA Weights:{weights}")
         assert abs(weights.sum() - 1) < 1e-5
 
-        # Update models using lora and bandit weights
-        for k in all_lora_keys:
-            adapted_weights = adjust_weights(weights, k, all_lora_params)
-            for i, (w, lora) in enumerate(zip(adapted_weights, all_lora_params)):
-                if w > 0:
-                    original_params[k] = original_params[k] + (lora[k][1] @ lora[k][0]) * lora[k][2] * w
-        updated_params = original_params
-        model.load_state_dict(updated_params)
+        # Record mean reward and check if converged
+        mean_reward = np.mean([ np.mean(v) for k,v in current_scores.items() ])
+        rewards_history.append(mean_reward)
+        wandb.log({"mean_reward": mean_reward, "data_consuming": step_count*args.test_batch_size})
+        if slope_convergence(rewards_history):
+            print("Training converged!")
+            print(f"Data consuming:{step_count*args.test_batch_size}")
+
+        # # Update models using lora and bandit weights
+        # for k in all_lora_keys:
+        #     adapted_weights = adjust_weights(weights, k, all_lora_params)
+        #     for i, (w, lora) in enumerate(zip(adapted_weights, all_lora_params)):
+        #         if i==0:
+        #             original_params[k] = original_params[k] + (lora[k][1] @ lora[k][0]) * lora[k][2] * w
+        # updated_params = original_params
+        # model.load_state_dict(updated_params)
     
     # Save aggregated model
     os.makedirs(args.output_path, exist_ok=True)
@@ -207,11 +252,11 @@ def main():
     parser.add_argument('--lora_path', type=str, default="lora_results/")
     parser.add_argument('--output_path', type=str, default="aggregation_results/")
     parser.add_argument('--objectives', nargs='+', default=["reflection", "coherence", "fluency"])
-    parser.add_argument('--test_batch_size', type=int, default=10)    
+    parser.add_argument('--test_batch_size', type=int, default=8)    
     parser.add_argument('--test_history_size', type=int, default=10)
     parser.add_argument('--num_runs', type=int, default=10)
     parser.add_argument('--num_steps', type=int, default=1000)
-    parser.add_argument('--do_wandb', type=bool, default=False)
+    parser.add_argument('--do_wandb', type=int, default=0)
     
     args = parser.parse_args()
     save_args(args, "DL_AGGREGATION", "logs/")

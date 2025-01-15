@@ -231,7 +231,7 @@ def main():
     parser.add_argument('--val_interval_size', type=int, default=8)
     parser.add_argument('--num_runs', type=int, default=10)
     parser.add_argument('--num_steps', type=int, default=1000)
-    parser.add_argument('--do_wandb', type=bool, default=False)
+    parser.add_argument('--do_wandb', type=int, default=0)
     
     args = parser.parse_args()
     save_args(args, "DL_TRAINING", "logs/")
