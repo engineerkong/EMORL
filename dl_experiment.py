@@ -13,7 +13,7 @@ from lora_utils import *
 from additional_utils import *
 
 def dynaopt(
-    seed: int = 321232,
+    seed: int = 429023,
     model_path: str = "models/google-t5-t5-base",
     data_path: str = "data/pair_data/pair_data.csv",
     experiment_path: str = "experiment_results/",
@@ -261,4 +261,4 @@ def dynaopt(
     return model
 
 if __name__ == "__main__":
-    model = dynaopt(train_batch_size = 2, val_batch_size = 2, val_interval_size = 8, num_runs = 10, num_steps = 5000, do_wandb = True)
+    model = dynaopt(train_batch_size = 8, val_batch_size = 8, val_interval_size = 8, num_runs = 10, num_steps = 5000, do_wandb = True)
