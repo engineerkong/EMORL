@@ -31,7 +31,7 @@ def training(args):
         - val_interval_size (int): Number of training steps between validation checks
         - num_runs (int): Number of training runs to perform
         - num_steps (int): Number of training steps per run
-        - do_wandb (bool)
+        - do_wandb (bool): Whether to use Weights & Biases for logging.
 
     Returns:
         dict: Dictionary containing trained LoRA parameters for each objective
@@ -60,7 +60,7 @@ def training(args):
         
         # Initialize wandb
         if args.do_wandb:
-            wandb.init(project="DynaDRL", name=f"DL_TRAINING_{objective}_{timestamp}")
+            wandb.init(project="DynaDRL", group="DL_TRAINING", name=f"training_{timestamp}")
             wandb.define_metric("mean_reward", step_metric="data_consuming")
         else:
             wandb.init(project="DynaDRL", mode="disabled")
