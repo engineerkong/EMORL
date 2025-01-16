@@ -105,7 +105,7 @@ def aggregation(args):
             scoring_method="logsum", max_batch_size=12)
 
     # Initialize bandit
-    bandit = Exp3(len(scorers)+1)
+    bandit = Exp3(len(scorers)+1, gamma=0.3)
     bandit_history = []
     # bandit_weight_history = [] # reward is always 1, scorer["weight"] = self.weight_bandit.weights[i]
     bandit_arm_weight_history = [] # reward from scaled scorer return
@@ -174,7 +174,8 @@ def aggregation(args):
         step_count += 1
 
         # Return scores back to update bandit weights
-        bandit(np.mean(scaled), last_chosen) # the object is set to np.mean(scaled)
+        mean_reward = [ np.mean(v) for k,v in current_scores.items() ]
+        bandit(1, last_chosen) # the object is set to np.mean(scaled)
         bandit_arm_weight_history.append(bandit.weights.copy())
         weights = bandit.weights[:2] / np.sum(bandit.weights[:2])
         chosen = bandit.draw()
