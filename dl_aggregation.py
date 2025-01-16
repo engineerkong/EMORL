@@ -67,51 +67,24 @@ def aggregation(args):
     model.to(device)
     model.eval()
 
-    # # Load lora params for all objectives
-    # all_lora_params = []
-    # all_lora_keys = []
-    # for objective in ["reflection", "fluency"]:
-    #     lora_params = load_lora(args.lora_path+"lora_"+objective+".npz")
-    #     for key in lora_params.keys():
-    #         if key not in all_lora_keys:
-    #             assert key.startswith('base_model.model.'), f"Key {key} does not start with 'base_model.model.'"
-    #             start_idx = len('base_model.model.')
-    #             suffix = key[start_idx:]
-    #             all_lora_keys.append(suffix)
-    #     all_lora_params.append(lora_params)
-    
-    # for k in all_lora_keys:
-    #     # adapted_weights = adjust_weights(weights, k, all_lora_params)
-    #     for i, (w, lora) in enumerate(zip(adapted_weights, all_lora_params)):
-    #         if i==0:
-    #             original_params[k] = original_params[k] + (lora[k][1] @ lora[k][0]) * lora[k][2] * w
+    # Load lora params for all objectives
+    all_lora_params = []
+    all_lora_keys = []
+    for objective in args.objectives:
+        lora_params = load_lora(args.lora_path+"lora_"+objective+".npz")
+        for key in lora_params.keys():
+            if key not in all_lora_keys:
+                all_lora_keys.append(key)
+        all_lora_params.append(lora_params)
 
-    # test model with one trained lora
-
-    lora_reflection_params = load_lora(args.lora_path+"lora_reflection.npz")
-    lora_reflection_keys = lora_reflection_params.keys()
-    for key in lora_reflection_keys:
+    # Update model params in average
+    updated_params = original_params
+    for key in all_lora_keys:
         start_idx = len('base_model.model.')
         k = key[start_idx:] + '.weight'
-        original_params[k] = original_params[k] + (lora_reflection_params[key][1] @ lora_reflection_params[key][0]) * lora_reflection_params[key][2] * 0.8
-
-    lora_fluency_params = load_lora(args.lora_path+"lora_fluency.npz")
-    lora_fluency_keys = lora_fluency_params.keys()
-    for key in lora_fluency_keys:
-        start_idx = len('base_model.model.')
-        k = key[start_idx:] + '.weight'
-        original_params[k] = original_params[k] + (lora_fluency_params[key][1] @ lora_fluency_params[key][0]) * lora_fluency_params[key][2] * 0.2
-    
-    # lora_params = load_lora(args.lora_path+"lora_coherence.npz")
-    # lora_keys = lora_params.keys()
-    # print(f"number of coherence lora layers change:{len(lora_keys)}")
-    # for key in lora_keys:
-    #     start_idx = len('base_model.model.')
-    #     k = key[start_idx:] + '.weight'
-    #     original_params[k] = original_params[k] + (lora_params[key][1] @ lora_params[key][0]) * lora_params[key][2]
-
-    # updated_params = original_params
-    # model.load_state_dict(updated_params)
+        for i, lora in enumerate(all_lora_params):
+            updated_params[k] = updated_params[k] + (lora[key][1] @ lora[key][0]) * lora[key][2] * (1/len(all_lora_params))
+    model.load_state_dict(updated_params)
 
     # Define generation parameters
     gen_params = {
@@ -126,8 +99,8 @@ def aggregation(args):
     scorer_model = ReflectionScoreDeployedCL(score_change=False, model_file= "./weights/reflection_scorer_weight.pt")
     scorer_model.type = "CLM"
     scorers = [{"name": "reflection", "model": scorer_model, "sign": 1, "weight": 1.0, "train": True},
-                {"name": "fluency", "model": Multi(type="fluency"), "sign": 1, "weight": 1.0, "train": True},
-                {"name": "coherence", "model": Multi(type="coherence"), "sign": 1, "weight": 1.0, "train": True}]
+                {"name": "fluency", "model": Multi(type="fluency"), "sign": 1, "weight": 1.0, "train": True}]
+                # {"name": "coherence", "model": Multi(type="coherence"), "sign": 1, "weight": 1.0, "train": True}]
     scorer = ScorerWrapper(scorers, learning_mode = "bandit_weighted", \
             scoring_method="logsum", max_batch_size=12)
 
@@ -135,7 +108,7 @@ def aggregation(args):
     bandit = Exp3(len(scorers)+1)
     bandit_history = []
     # bandit_weight_history = [] # reward is always 1, scorer["weight"] = self.weight_bandit.weights[i]
-    bandit_arm_weight_history = [] # reward from scorer return
+    bandit_arm_weight_history = [] # reward from scaled scorer return
     chosen = bandit.draw() # select by bandit according to distr
     last_chosen = chosen
     print("Bandit arm pulled:", chosen)
@@ -203,7 +176,7 @@ def aggregation(args):
         # Return scores back to update bandit weights
         bandit(np.mean(scaled), last_chosen) # the object is set to np.mean(scaled)
         bandit_arm_weight_history.append(bandit.weights.copy())
-        weights = bandit.weights[:3] / np.sum(bandit.weights[:3])
+        weights = bandit.weights[:2] / np.sum(bandit.weights[:2])
         chosen = bandit.draw()
         last_chosen = chosen
         bandit_pulls[last_chosen] += 1
@@ -224,14 +197,14 @@ def aggregation(args):
             print("Training converged!")
             print(f"Data consuming:{step_count*args.test_batch_size}")
 
-        # # Update models using lora and bandit weights
-        # for k in all_lora_keys:
-        #     adapted_weights = adjust_weights(weights, k, all_lora_params)
-        #     for i, (w, lora) in enumerate(zip(adapted_weights, all_lora_params)):
-        #         if i==0:
-        #             original_params[k] = original_params[k] + (lora[k][1] @ lora[k][0]) * lora[k][2] * w
-        # updated_params = original_params
-        # model.load_state_dict(updated_params)
+        # Update models using lora and bandit weights
+        updated_params = original_params
+        for key in all_lora_keys:
+            start_idx = len('base_model.model.')
+            k = key[start_idx:] + '.weight'
+            for i, (w, lora) in enumerate(zip(weights, all_lora_params)):
+                    updated_params[k] = updated_params[k] + (lora[key][1] @ lora[key][0]) * lora[key][2] * w
+        model.load_state_dict(updated_params)
     
     # Save aggregated model
     os.makedirs(args.output_path, exist_ok=True)
@@ -251,7 +224,7 @@ def main():
     parser.add_argument('--data_path', type=str, default="data/pair_data/pair_data.csv")
     parser.add_argument('--lora_path', type=str, default="lora_results/")
     parser.add_argument('--output_path', type=str, default="aggregation_results/")
-    parser.add_argument('--objectives', nargs='+', default=["reflection", "coherence", "fluency"])
+    parser.add_argument('--objectives', nargs='+', default=["reflection", "fluency"])
     parser.add_argument('--test_batch_size', type=int, default=8)    
     parser.add_argument('--test_history_size', type=int, default=10)
     parser.add_argument('--num_runs', type=int, default=10)
