@@ -67,24 +67,6 @@ def aggregation(args):
     model.to(device)
     model.eval()
 
-    # Load lora params for all objectives
-    all_lora_params = []
-    all_lora_keys = []
-    for objective in args.objectives:
-        lora_params = load_lora(args.lora_path+"lora_"+objective+".npz")
-        for key in lora_params.keys():
-            if key not in all_lora_keys:
-                all_lora_keys.append(key)
-        all_lora_params.append(lora_params)
-
-    # Update model params in average
-    updated_params = original_params
-    for key in all_lora_keys:
-        start_idx = len('base_model.model.')
-        k = key[start_idx:] + '.weight'
-        for i, lora in enumerate(all_lora_params):
-            updated_params[k] = updated_params[k] + (lora[key][1] @ lora[key][0]) * lora[key][2] * (1/len(all_lora_params))
-    model.load_state_dict(updated_params)
 
     # Define generation parameters
     gen_params = {
@@ -104,11 +86,14 @@ def aggregation(args):
     scorer = ScorerWrapper(scorers, learning_mode = "bandit_weighted", \
             scoring_method="logsum", max_batch_size=12)
 
+
     # Initialize bandit
-    bandit = Exp3(len(scorers)+1, gamma=0.3)
+    print("Initilize Bandit")
+    bandit = Exp3(len(scorers)+1, gamma=0.07)
     bandit_history = []
     # bandit_weight_history = [] # reward is always 1, scorer["weight"] = self.weight_bandit.weights[i]
     bandit_arm_weight_history = [] # reward from scaled scorer return
+    weights = bandit.weights[:len(args.objectives)] / np.sum(bandit.weights[:len(args.objectives)])
     chosen = bandit.draw() # select by bandit according to distr
     last_chosen = chosen
     print("Bandit arm pulled:", chosen)
@@ -119,11 +104,21 @@ def aggregation(args):
     bandit_arm_weight_history.append(bandit.weights.copy())
     print("Bandit Pull:", bandit_pulls)
     print("Bandit Weights:", bandit.weights)
+    print(f"Scaled Bandit Weights:{weights}")
+    assert abs(weights.sum() - 1) < 1e-5
 
-    # Dynamic weighting loop
     step_count = 0
     rewards_history = []
     while step_count < args.num_steps:
+    # Load lora params for all objectives
+        updated_params = copy.deepcopy(original_params)
+        for i in range(len(args.objectives)):
+            lora_params = load_lora(args.lora_path+"lora_"+args.objectives[i]+".npz")
+            for key in lora_params.keys():
+                start_idx = len('base_model.model.')
+                k = key[start_idx:] + '.weight'
+                updated_params[k] = updated_params[k] + (lora_params[key][1] @ lora_params[key][0]) * lora_params[key][2] * weights[i]
+        model.load_state_dict(updated_params)
 
         # Dynamic weighting on test dataset
         current_scores = { k["name"]+"_scores":[] for k in scorer.scorers }
@@ -175,9 +170,9 @@ def aggregation(args):
 
         # Return scores back to update bandit weights
         mean_reward = [ np.mean(v) for k,v in current_scores.items() ]
-        bandit(1, last_chosen) # the object is set to np.mean(scaled)
+        bandit(np.mean(scaled), last_chosen) # the object is set to np.mean(scaled)
         bandit_arm_weight_history.append(bandit.weights.copy())
-        weights = bandit.weights[:2] / np.sum(bandit.weights[:2])
+        weights = bandit.weights[:len(args.objectives)] / np.sum(bandit.weights[:len(args.objectives)])
         chosen = bandit.draw()
         last_chosen = chosen
         bandit_pulls[last_chosen] += 1
@@ -187,25 +182,15 @@ def aggregation(args):
         print("Bandit weights:", bandit.weights)
         for k,v in current_scores.items():
             rl_scorer_history[k].extend(v)
-        print(f"LORA Weights:{weights}")
+        print(f"Scaled Bandit Weights:{weights}")
         assert abs(weights.sum() - 1) < 1e-5
 
         # Record mean reward and check if converged
-        mean_reward = np.mean([ np.mean(v) for k,v in current_scores.items() ])
         rewards_history.append(mean_reward)
         wandb.log({"mean_reward": mean_reward, "data_consuming": step_count*args.test_batch_size})
         if slope_convergence(rewards_history):
             print("Training converged!")
             print(f"Data consuming:{step_count*args.test_batch_size}")
-
-        # Update models using lora and bandit weights
-        updated_params = original_params
-        for key in all_lora_keys:
-            start_idx = len('base_model.model.')
-            k = key[start_idx:] + '.weight'
-            for i, (w, lora) in enumerate(zip(weights, all_lora_params)):
-                    updated_params[k] = updated_params[k] + (lora[key][1] @ lora[key][0]) * lora[key][2] * w
-        model.load_state_dict(updated_params)
     
     # Save aggregated model
     os.makedirs(args.output_path, exist_ok=True)
@@ -221,9 +206,9 @@ def aggregation(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=429023)
-    parser.add_argument('--model_path', type=str, default="models/google-t5-t5-base")
-    parser.add_argument('--data_path', type=str, default="data/pair_data/pair_data.csv")
-    parser.add_argument('--lora_path', type=str, default="lora_results/")
+    parser.add_argument('--model_path', type=str, default="models/t5-base")
+    parser.add_argument('--data_path', type=str, default="data/PAIR/pair_data.csv")
+    parser.add_argument('--lora_path', type=str, default="lora_results/20250115/")
     parser.add_argument('--output_path', type=str, default="aggregation_results/")
     parser.add_argument('--objectives', nargs='+', default=["reflection", "fluency"])
     parser.add_argument('--test_batch_size', type=int, default=8)    
@@ -233,7 +218,7 @@ def main():
     parser.add_argument('--do_wandb', type=int, default=0)
     
     args = parser.parse_args()
-    save_args(args, "DL_AGGREGATION", "logs/")
+    # save_args(args, "DL_AGGREGATION", "logs/")
     
     # Run aggregation
     model = aggregation(args)

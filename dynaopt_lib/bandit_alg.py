@@ -14,7 +14,7 @@ def draw(weights):
         if choice <= 0:
             return choiceIndex
         choiceIndex += 1
-def distr(weights, gamma=0.0):
+def distr(weights, gamma=0.07):
     theSum = float(sum(weights))
     return tuple((1.0 - gamma) * (w / theSum) + (gamma / len(weights)) for w in weights)
 def exp3(numActions, reward, gamma, rewardMin = 0, rewardMax = 1):

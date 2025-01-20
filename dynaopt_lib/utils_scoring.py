@@ -23,7 +23,7 @@ class ScorerWrapper:
         self.learning_mode = learning_mode
         self.used_scorers = []
         if self.learning_mode == "bandit_weighted" or self.learning_mode == "argmin" or self.learning_mode == "contextual":
-            self.weight_bandit = Exp3(len(self.scorers), gamma=0.3)
+            self.weight_bandit = Exp3(len(self.scorers))
         self.total_step_count = total_step_count
     def get_score_names(self):
         return [s["name"] for s in self.scorers]
