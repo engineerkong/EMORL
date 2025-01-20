@@ -170,7 +170,7 @@ def aggregation(args):
 
         # Return scores back to update bandit weights
         mean_reward = [ np.mean(v) for k,v in current_scores.items() ]
-        bandit(np.mean(scaled), last_chosen) # the object is set to np.mean(scaled)
+        bandit(np.mean(scaled)*100, last_chosen) # the object is set to np.mean(scaled)
         bandit_arm_weight_history.append(bandit.weights.copy())
         weights = bandit.weights[:len(args.objectives)] / np.sum(bandit.weights[:len(args.objectives)])
         chosen = bandit.draw()
