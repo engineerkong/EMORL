@@ -13,7 +13,7 @@ from dynaopt_lib import *
 from lora_utils import *
 from additional_utils import *
 
-def merge(args):
+def ensemble(args):
     """
     Aggregates multiple LoRA parameters trained on different objectives into a single model.
     This function loads the base T5 model and multiple LoRA checkpoints, then combines them
@@ -47,7 +47,7 @@ def merge(args):
 
     # Initialize wandb
     if args.do_wandb:
-        wandb.init(project="DynaDRL", group="DL_MERGE", name=f"merge_{timestamp}")
+        wandb.init(project="DynaDRL", group="DL_ENSEMBLE", name=f"ensemble_{timestamp}")
         wandb.define_metric("mean_reward", step_metric="data_consuming")
     else:
         wandb.init(project="DynaDRL", mode="disabled")
@@ -75,10 +75,7 @@ def merge(args):
         "early_stopping": True,
         "do_sample": True,
         "num_return_sequences": args.num_runs,
-        "temperature": 1.0,
-        "return_dict_in_generate": True,
-        "output_scores": True,
-        "output_hidden_states": True
+        "temperature": 1.0
     }
 
     # Define scorer
@@ -91,28 +88,30 @@ def merge(args):
             scoring_method="logsum", max_batch_size=12)
 
 
-    # Initialize bandit
-    print("Initilize Bandit")
-    bandit = Exp3(len(scorers)+1, gamma=0.07)
-    bandit_history = []
-    # bandit_weight_history = [] # reward is always 1, scorer["weight"] = self.weight_bandit.weights[i]
-    bandit_arm_weight_history = [] # reward from scaled scorer return
-    weights = bandit.weights[:len(args.objectives)] / np.sum(bandit.weights[:len(args.objectives)])
-    chosen = bandit.draw() # select by bandit according to distr
-    last_chosen = chosen
-    print("Bandit arm pulled:", chosen)
-    rl_scorer_history = { k["name"]+"_scores":[] for k in scorer.scorers }
-    bandit_pulls = { i:0 for i in range(len(scorer.scorers)+1) } 
-    bandit_pulls[last_chosen] += 1
-    bandit_history.append(last_chosen)
-    bandit_arm_weight_history.append(bandit.weights.copy())
-    print("Bandit Pull:", bandit_pulls)
-    print("Bandit Weights:", bandit.weights)
-    print(f"Scaled Bandit Weights:{weights}")
-    assert abs(weights.sum() - 1) < 1e-5
+    # # Initialize bandit
+    # print("Initilize Bandit")
+    # bandit = Exp3(len(scorers)+1, gamma=0.07)
+    # bandit_history = []
+    # # bandit_weight_history = [] # reward is always 1, scorer["weight"] = self.weight_bandit.weights[i]
+    # bandit_arm_weight_history = [] # reward from scaled scorer return
+    # weights = bandit.weights[:len(args.objectives)] / np.sum(bandit.weights[:len(args.objectives)])
+    # chosen = bandit.draw() # select by bandit according to distr
+    # last_chosen = chosen
+    # print("Bandit arm pulled:", chosen)
+    # rl_scorer_history = { k["name"]+"_scores":[] for k in scorer.scorers }
+    # bandit_pulls = { i:0 for i in range(len(scorer.scorers)+1) } 
+    # bandit_pulls[last_chosen] += 1
+    # bandit_history.append(last_chosen)
+    # bandit_arm_weight_history.append(bandit.weights.copy())
+    # print("Bandit Pull:", bandit_pulls)
+    # print("Bandit Weights:", bandit.weights)
+    # print(f"Scaled Bandit Weights:{weights}")
+    # assert abs(weights.sum() - 1) < 1e-5
+    weights = [0.5, 0.5]
 
     step_count = 0
     rewards_history = []
+    decoder_input_ids = torch.tensor([[model1.config.decoder_start_token_id]])  # <pad> 或 <s> 起始标记
     while step_count < args.num_steps:
     # Load lora params for all objectives
         
@@ -121,7 +120,8 @@ def merge(args):
         # Dynamic weighting on test dataset
         for batch in test_dataloader:
 
-            all_outputs = []
+            all_hidden_states = 0
+            model_list = []
             for i in range(len(args.objectives)):
                 updated_params = copy.deepcopy(original_params)
                 lora_params = load_lora(args.lora_path+"lora_"+args.objectives[i]+".npz")
@@ -129,17 +129,29 @@ def merge(args):
                     start_idx = len('base_model.model.')
                     k = key[start_idx:] + '.weight'
                     updated_params[k] = updated_params[k] + (lora_params[key][1] @ lora_params[key][0]) * lora_params[key][2]
-                model.load_state_dict(updated_params)
+                model_list.append(model.load_state_dict(updated_params))
 
-                # Generate outputs with given prompts
-                responses = batch["responses"]
-                prompts = batch["prompts"]
-                gen_input = tokenizer.batch_encode_plus(prompts, max_length=128, \
-                    return_tensors="pt", padding="longest", truncation=True)
-                gen_input = {k: v.to(device) for k, v in gen_input.items()}
-                gens_out = model.generate(input_ids=gen_input["input_ids"], \
-                    attention_mask=gen_input["attention_mask"], **gen_params)
-                all_outputs.append(gens_out)
+            # Generate outputs with given prompts
+            responses = batch["responses"]
+            prompts = batch["prompts"]
+            gen_input = tokenizer.batch_encode_plus(prompts, max_length=128, \
+                return_tensors="pt", padding="longest", truncation=True)
+            gen_input = {k: v.to(device) for k, v in gen_input.items()}
+            gens_out_0 = model_list[0].generate(input_ids=gen_input["input_ids"], \
+                attention_mask=gen_input["attention_mask"], \
+                decoder_input_ids=decoder_input_ids, \
+                output_hidden_states=True, \
+                return_dict=True, \
+                **gen_params)
+            all_hidden_states += gens_out_0.decoder_hidden_states[-1] * 0.5
+            gens_out_1 = model_list[1].generate(input_ids=gen_input["input_ids"], \
+                attention_mask=gen_input["attention_mask"], \
+                decoder_input_ids=decoder_input_ids, \
+                output_hidden_states=True, \
+                return_dict=True, \
+                **gen_params)
+            all_hidden_states += gens_out_1.decoder_hidden_states[-1] * 0.5
+            logits = model_list[0].lm_head(all_hidden_states)
       
             # 融合logits并生成文本
             merged_scores = []
