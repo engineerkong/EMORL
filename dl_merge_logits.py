@@ -148,7 +148,10 @@ def merge(args):
                 for model_idx, outputs in enumerate(all_outputs):
                     logits = outputs.scores[step]
                     probs = F.softmax(logits, dim=-1)
-                    weighted_probs = probs * weights[model_idx]
+                    if model_idx == 0:
+                        weighted_probs = probs * 0.8
+                    elif model_idx == 1:
+                        weighted_probs = probs * 0.2
                     step_scores.append(weighted_probs)
                 
                 merged_prob = sum(step_scores)
