@@ -17,7 +17,7 @@ import numpy as np
 import torch
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 
-def grid_search_hidden_weights(model_list, tokenizer, prompts, rewards_fn, max_output_length=64, grid_size=11, device="cuda"):
+def grid_search_hidden_weights(model_list, tokenizer, dataloader, scorer, gen_params, max_output_length=64, grid_size=11, test_batch_size=1, num_runs=1, device="cuda"):
     """
     Perform grid search to find the best weights for combining three models' hidden layers.
     
@@ -38,10 +38,6 @@ def grid_search_hidden_weights(model_list, tokenizer, prompts, rewards_fn, max_o
     best_weights = None
     best_mean_reward = -float("inf")
 
-    # Encode prompts for input
-    gen_input = tokenizer.batch_encode_plus(prompts, max_length=128, return_tensors="pt", padding="longest", truncation=True)
-    gen_input = {k: v.to(device) for k, v in gen_input.items()}
-
     # Loop through all weight combinations
     for w1 in weight_range:
         for w2 in weight_range:
@@ -52,45 +48,92 @@ def grid_search_hidden_weights(model_list, tokenizer, prompts, rewards_fn, max_o
             weights = torch.tensor([w1, w2, w3], device=device)
             rewards = []
 
-            # Initialize decoder input ids
-            decoder_input_ids = torch.tensor([[model_list[0].config.decoder_start_token_id]]).to(device)
-            generated_tokens = []
-
-            # Generate output using weighted hidden states
-            for step in range(max_output_length):
-                # Get outputs from all models
-                hidden_states_combined = 0
-                for model_idx, model in enumerate(model_list):
-                    outputs = model(
-                        input_ids=gen_input["input_ids"],
-                        attention_mask=gen_input["attention_mask"],
-                        decoder_input_ids=decoder_input_ids,
-                        output_hidden_states=True,
-                        return_dict=True,
-                    )
-                    hidden_states_combined += weights[model_idx] * outputs.decoder_hidden_states[-1]
+            current_scores = { k["name"]+"_scores":[] for k in scorer.scorers }
+            for batch in dataloader:
                 
-                # Compute logits and next token
-                logits = model_list[0].lm_head(hidden_states_combined)
-                next_token = torch.argmax(logits[:, -1, :], dim=-1)
-                generated_tokens.append(next_token.item())
+                # Generate outputs with given prompts
+                responses = batch["responses"]
+                prompts = batch["prompts"]
+                # Encode prompts for input
+                gen_input = tokenizer.batch_encode_plus(prompts, max_length=128, return_tensors="pt", padding="longest", truncation=True)
+                gen_input = {k: v.to(device) for k, v in gen_input.items()}
 
-                # Update decoder input ids
-                decoder_input_ids = torch.cat([decoder_input_ids, next_token.unsqueeze(-1)], dim=-1)
+                # 扩展输入和解码器输入
+                expanded_input_ids = gen_input["input_ids"].repeat_interleave(num_runs, dim=0)  # (test_batch_size * num_runs, seq_len)
+                expanded_attention_mask = gen_input["attention_mask"].repeat_interleave(num_runs, dim=0)  # (test_batch_size * num_runs, seq_len)
+                decoder_input_ids = torch.full(
+                    (test_batch_size * num_runs, 1),
+                    model_list[0].config.decoder_start_token_id,
+                    dtype=torch.long,
+                    device=device,
+                )  # (test_batch_size * num_runs, 1)
 
-                # Check for end-of-sequence token
-                if next_token == model_list[0].config.eos_token_id:
-                    break
+                generated_tokens = torch.zeros(test_batch_size*num_runs, max_output_length, dtype=torch.long, device=device)
+                # 逐步生成
+                for step in range(max_output_length):
+                    hidden_states_combined = torch.zeros(
+                        decoder_input_ids.size(0),  # test_batch_size * num_runs
+                        decoder_input_ids.size(1),  # 当前解码长度
+                        model_list[0].config.d_model,  # 模型隐藏层维度
+                        dtype=torch.float,
+                        device=device,
+                    )
 
-                # Decode generated tokens
-                generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-                rewards.append(rewards_fn(generated_text, prompts))
+                    # 加权组合每个模型的隐藏状态
+                    for model_idx, model in enumerate(model_list):
+                        outputs = model(
+                            input_ids=expanded_input_ids,
+                            attention_mask=expanded_attention_mask,
+                            decoder_input_ids=decoder_input_ids,
+                            output_hidden_states=True,
+                            return_dict=True,
+                        )
+                        hidden_states_combined += weights[model_idx] * outputs.decoder_hidden_states[-1]
 
-            # Calculate mean reward for this weight combination
+                    # 计算 logits 并确定下一个 token
+                    logits = model_list[0].lm_head(hidden_states_combined) # 模型的lm_head均一致
+                    next_token = torch.argmax(logits[:, -1, :], dim=-1)  # shape: (test_batch_size * num_runs,)
+
+                    # 更新 generated_tokens
+                    generated_tokens[:, step] = next_token  # 将生成的 token 存储在对应列
+
+                    # 更新解码器输入
+                    decoder_input_ids = torch.cat([decoder_input_ids, next_token.unsqueeze(-1)], dim=1)
+
+                    # 检查是否所有序列都生成结束标记
+                    if (next_token == model_list[0].config.eos_token_id).all():
+                        break
+
+                generateds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+                generateds = [ g.split("[CLS]") for g in generateds]
+                new_generateds = []
+                for g_list in generateds:
+                    if len(g_list) <= 1:
+                        new_generateds.append([g_list[0].strip()])
+                    else:
+                        new_generateds.append([x.strip() for x in g_list[:-1]])
+                generateds = new_generateds
+                cls_generateds = [ [ x.strip() + " [CLS]" for x in g] for g in generateds ]
+                cls_generateds = [ " ".join(g) for g in cls_generateds]
+                generateds = [ " ".join(g) for g in generateds]
+                generateds = [ g.replace("<pad>", "").strip() for g in generateds]
+                generateds = [g.replace("[CLS]", "").strip() for g in generateds]
+                prompts = [p for p in prompts for _ in range(num_runs)]
+                responses = [r for r in responses for _ in range(num_runs)]
+
+                scorer_returns = scorer.rl_score(inputs=prompts, generateds=generateds, responses=responses)
+                for k,v in scorer_returns.items():
+                    if k in current_scores:
+                        current_scores[k].extend(v)
+
+            # Calculate mean reward for this weight combination    
+            rewards = [ np.mean(v) for k,v in current_scores.items() ]
             mean_reward = np.mean(rewards)
             if mean_reward > best_mean_reward:
                 best_mean_reward = mean_reward
                 best_weights = weights.cpu().numpy()
+            print(f"Weights:{weights}")
+            print(f"Rewards:{rewards}")
 
     return {
         "best_weights": best_weights,
@@ -139,8 +182,8 @@ def ensemble(args):
 
     # Load data
     train_data, val_data, test_data = get_data(args.data_path)
-    test_dataloader = DataLoader(dataset=test_data[:8], batch_size=args.test_batch_size,\
-        sampler=RandomSampler(test_data[:8]), drop_last=True, collate_fn=collate_fn)
+    test_dataloader = DataLoader(dataset=test_data[:4], batch_size=args.test_batch_size,\
+        sampler=RandomSampler(test_data[:4]), drop_last=True, collate_fn=collate_fn)
 
     # Load original model 
     model, tokenizer = get_model(
@@ -172,193 +215,36 @@ def ensemble(args):
     scorer = ScorerWrapper(scorers, learning_mode = "bandit_weighted", \
             scoring_method="logsum", max_batch_size=12)
 
-    def rewards_fn(prompts, generateds, responses, current_scores):
-        scorer_returns = scorer.rl_score(prompts, generateds, responses)
-        for k,v in scorer_returns.items():
-            if k in current_scores:
-                current_scores[k].extend(v)
-        return current_scores
+    # Gather models individual objectives
+    model_list = []
+    for i in range(len(args.objectives)):
+        new_model = copy.deepcopy(model)
+        new_model.to(device)
+        updated_params = copy.deepcopy(original_params)
+        lora_params = load_lora(args.lora_path+"lora_"+args.objectives[i]+".npz")
+        for key in lora_params.keys():
+            start_idx = len('base_model.model.')
+            k = key[start_idx:] + '.weight'
+            updated_params[k] = updated_params[k] + (lora_params[key][1] @ lora_params[key][0]) * lora_params[key][2]
+        new_model.load_state_dict(updated_params)
+        model_list.append(new_model)
     
-    # # Initialize bandit
-    # print("Initilize Bandit")
-    # bandit = Exp3(len(scorers)+1, gamma=0.07)
-    # bandit_history = []
-    # # bandit_weight_history = [] # reward is always 1, scorer["weight"] = self.weight_bandit.weights[i]
-    # bandit_arm_weight_history = [] # reward from scaled scorer return
-    # weights = bandit.weights[:len(args.objectives)] / np.sum(bandit.weights[:len(args.objectives)])
-    # chosen = bandit.draw() # select by bandit according to distr
-    # last_chosen = chosen
-    # print("Bandit arm pulled:", chosen)
-    # rl_scorer_history = { k["name"]+"_scores":[] for k in scorer.scorers }
-    # bandit_pulls = { i:0 for i in range(len(scorer.scorers)+1) } 
-    # bandit_pulls[last_chosen] += 1
-    # bandit_history.append(last_chosen)
-    # bandit_arm_weight_history.append(bandit.weights.copy())
-    # print("Bandit Pull:", bandit_pulls)
-    # print("Bandit Weights:", bandit.weights)
-    # print(f"Scaled Bandit Weights:{weights}")
-    # assert abs(weights.sum() - 1) < 1e-5
-    # weights = [1.0, 0.0]
+    # Perform grid search
+    results = grid_search_hidden_weights(
+        model_list=model_list,
+        tokenizer=tokenizer,
+        dataloader=test_dataloader,
+        scorer=scorer,
+        gen_params=gen_params,
+        grid_size=11,  # e.g., weights range from 0.0 to 1.0 in 0.1 steps
+        test_batch_size=args.test_batch_size,
+        num_runs=args.num_runs,
+        device=device
+    )
 
-    # step_count = 0
-    # rewards_history = []
-    # model_list = []
-    # for i in range(len(args.objectives)):
-    #     new_model = copy.deepcopy(model)
-    #     new_model.to(device)
-    #     updated_params = copy.deepcopy(original_params)
-    #     lora_params = load_lora(args.lora_path+"lora_"+args.objectives[i]+".npz")
-    #     for key in lora_params.keys():
-    #         start_idx = len('base_model.model.')
-    #         k = key[start_idx:] + '.weight'
-    #         updated_params[k] = updated_params[k] + (lora_params[key][1] @ lora_params[key][0]) * lora_params[key][2]
-    #     new_model.load_state_dict(updated_params)
-    #     model_list.append(new_model)
-    
-    # max_output_length = 64
-
-    # while step_count < args.num_steps:
-    # # Load lora params for all objectives
-        
-    #     # Dynamic weighting on test dataset
-    #     current_scores = { k["name"]+"_scores":[] for k in scorer.scorers }
-    #     # Dynamic weighting on test dataset
-    #     for batch in test_dataloader:
-            
-    #         decoder_input_ids = torch.full(
-    #             (args.test_batch_size, 1),
-    #             model.config.decoder_start_token_id,
-    #             dtype=torch.long,
-    #             device=device,
-    #         )
-            
-    #         # Generate outputs with given prompts
-    #         responses = batch["responses"]
-    #         prompts = batch["prompts"]
-    #         gen_input = tokenizer.batch_encode_plus(prompts, max_length=128, \
-    #             return_tensors="pt", padding="longest", truncation=True)
-    #         gen_input = {k: v.to(device) for k, v in gen_input.items()}
-    #         gens_out = model_list[0].generate(input_ids=gen_input["input_ids"],\
-    #             attention_mask=gen_input["attention_mask"], **gen_params)
-            
-    #         generated_tokens = torch.zeros(args.test_batch_size, max_output_length, dtype=torch.long, device=device)
-            
-    #         for step in range(max_output_length):
-    #             # outputs_0 = model_list[0](
-    #             #     input_ids=gen_input["input_ids"],
-    #             #     attention_mask=gen_input["attention_mask"],
-    #             #     decoder_input_ids=decoder_input_ids,
-    #             #     output_hidden_states=True,
-    #             #     return_dict=True,
-    #             # )
-    #             # outputs_1 = model_list[1](
-    #             #     input_ids=gen_input["input_ids"],
-    #             #     attention_mask=gen_input["attention_mask"],
-    #             #     decoder_input_ids=decoder_input_ids,
-    #             #     output_hidden_states=True,
-    #             #     return_dict=True,
-    #             # )
-    #             # outputs_2 = model_list[2](
-    #             #     input_ids=gen_input["input_ids"],
-    #             #     attention_mask=gen_input["attention_mask"],
-    #             #     decoder_input_ids=decoder_input_ids,
-    #             #     output_hidden_states=True,
-    #             #     return_dict=True,
-    #             # )
-
-    #             # hidden_states_0 = outputs_0.decoder_hidden_states[-1]  # (batch_size, seq_len, hidden_dim)
-    #             # hidden_states_1 = outputs_1.decoder_hidden_states[-1]  # (batch_size, seq_len, hidden_dim)
-    #             # hidden_states_2 = outputs_2.decoder_hidden_states[-1]  # (batch_size, seq_len, hidden_dim)
-
-    #             # all_hidden_states = hidden_states_0*0.69 + hidden_states_1*0.21 + hidden_states_2*0.1
-
-    #             # logits = model_list[0].lm_head(all_hidden_states)
-
-    #             # next_token = torch.argmax(logits[:, -1, :], dim=-1)  # shape: (batch_size,)
-    #             # generated_tokens[:, step] = next_token  # 按时间步存储到第 step 列
-
-    #             # # 更新解码器输入
-    #             # decoder_input_ids = torch.cat([decoder_input_ids, next_token.unsqueeze(-1)], dim=-1)
-
-    #             # # 从 logits 中获取下一个 token
-    #             outputs = model(
-    #                 input_ids=gen_input["input_ids"],
-    #                 attention_mask=gen_input["attention_mask"],
-    #                 decoder_input_ids=decoder_input_ids,
-    #                 output_hidden_states=True,
-    #                 return_dict=True,
-    #             )
-    #             logits = outputs.logits  # shape: (batch_size, seq_len, vocab_size)
-    #             next_token = torch.argmax(logits[:, -1, :], dim=-1)  # shape: (batch_size,)
-    #             generated_tokens[:, step] = next_token
-                
-    #             decoder_input_ids = torch.cat([decoder_input_ids, next_token.unsqueeze(-1)], dim=-1)
-
-    #             # 检查是否全部生成结束标记
-    #             if (next_token == model_list[0].config.eos_token_id).all():
-    #                 break
-
-    #         generateds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-    #         generateds = [ g.split("[CLS]") for g in generateds]
-    #         new_generateds = []
-    #         for g_list in generateds:
-    #             if len(g_list) <= 1:
-    #                 new_generateds.append([g_list[0].strip()])
-    #             else:
-    #                 new_generateds.append([x.strip() for x in g_list[:-1]])
-    #         generateds = new_generateds
-    #         cls_generateds = [ [ x.strip() + " [CLS]" for x in g] for g in generateds ]
-    #         cls_generateds = [ " ".join(g) for g in cls_generateds]
-    #         generateds = [ " ".join(g) for g in generateds]
-    #         generateds = [ g.replace("<pad>", "").strip() for g in generateds]
-    #         generateds = [g.replace("[CLS]", "").strip() for g in generateds]
-    #         prompts = [p for p in prompts for _ in range(args.num_runs)]
-    #         responses = [r for r in responses for _ in range(args.num_runs)]
-
-    #         # Calculate scores
-    #         scorer_returns = scorer.rl_score(prompts, generateds, responses=responses, step_count=step_count, bandit=None)
-    #         for k,v in scorer_returns.items():
-    #             if k in current_scores:
-    #                 current_scores[k].extend(v)
-    #     print("Mean Rewards", [ np.mean(v) for k,v in current_scores.items() ])
-    #     scaled = []
-    #     for k,v in rl_scorer_history.items():
-    #         HISTORY_SIZE = args.test_history_size
-    #         history = v[-HISTORY_SIZE:]
-    #         if history == []:
-    #             scaled.append(0.0)
-    #         else:
-    #             scaled.append(np.mean(current_scores[k])-np.mean(history))
-    #     print("Mean Scaled Rewards", scaled) # all 3 objectives
-
-    #     # Update step_count when one dataloader is finished
-    #     step_count += 1
-
-    #     # Return scores back to update bandit weights
-    #     mean_reward = [ np.mean(v) for k,v in current_scores.items() ]
-    #     bandit(np.mean(scaled)*100, last_chosen) # the object is set to np.mean(scaled)
-    #     bandit_arm_weight_history.append(bandit.weights.copy())
-    #     weights = bandit.weights[:len(args.objectives)] / np.sum(bandit.weights[:len(args.objectives)])
-    #     chosen = bandit.draw()
-    #     last_chosen = chosen
-    #     bandit_pulls[last_chosen] += 1
-    #     bandit_history.append(last_chosen)
-    #     print(f"Step {step_count} / Chosen arm: {chosen}")
-    #     print("Bandit Pull:", bandit_pulls)
-    #     print("Bandit weights:", bandit.weights)
-    #     for k,v in current_scores.items():
-    #         rl_scorer_history[k].extend(v)
-    #     print(f"Scaled Bandit Weights:{weights}")
-    #     assert abs(weights.sum() - 1) < 1e-5
-
-    #     # Record mean reward and check if converged
-    #     rewards_history.append(mean_reward)
-    #     wandb.log({"mean_reward": mean_reward, "data_consuming": step_count*args.test_batch_size})
-    #     if slope_convergence(rewards_history):
-    #         print("Training converged!")
-    #         print(f"Data consuming:{step_count*args.test_batch_size}")
-
-    # return model
+    # Print results
+    print("Best Weights:", results["best_weights"])
+    print("Best Mean Reward:", results["best_mean_reward"])
 
 def main():
     parser = argparse.ArgumentParser()
@@ -366,7 +252,7 @@ def main():
     parser.add_argument('--model_path', type=str, default="models/t5-base")
     parser.add_argument('--data_path', type=str, default="data/PAIR/pair_data.csv")
     parser.add_argument('--lora_path', type=str, default="lora_results/20250115/")
-    parser.add_argument('--output_path', type=str, default="aggregation_results/")
+    parser.add_argument('--output_path', type=str, default="ensemble_results/")
     parser.add_argument('--objectives', nargs='+', default=["reflection", "fluency", "coherence"])
     parser.add_argument('--test_batch_size', type=int, default=4)    
     parser.add_argument('--test_history_size', type=int, default=10)
@@ -377,7 +263,7 @@ def main():
     args = parser.parse_args()
     # save_args(args, "DL_ENSEMBLE", "logs/")
     
-    # Run merge
+    # Run ensemble
     model = ensemble(args)
     
     return model
