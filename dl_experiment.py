@@ -10,8 +10,8 @@ import os
 import copy
 
 from dynaopt_lib import *
-from lora_utils import *
-from additional_utils import *
+from utils_lora import *
+from utils_additional import *
 
 def dynaopt(
     seed: int = 429023,

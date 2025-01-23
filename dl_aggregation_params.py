@@ -10,8 +10,8 @@ import os
 
 from model_empathy import *
 from dynaopt_lib import *
-from lora_utils import *
-from additional_utils import *
+from utils_lora import *
+from utils_additional import *
 
 def grid_search_aggregation_weights(args, original_model, original_params, tokenizer, dataloader, scorer, gen_params, max_output_length=64, grid_size=101, test_batch_size=1, num_runs=1, device="cuda"):
     """
