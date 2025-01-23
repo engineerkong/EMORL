@@ -172,8 +172,8 @@ class Multi:
             self.model.to(self.device)
             self.metric = partial(score_coherence, model=self.model, tokenizer=self.tokenizer)
         elif self.type == "specificity":
-            self.model = BertModel.from_pretrained('bert-base-uncased')
-            self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+            self.model = BertModel.from_pretrained('models/bert-base-uncased')
+            self.tokenizer = BertTokenizer.from_pretrained('models/bert-base-uncased')
             self.model.to(self.device)
             self.metric = partial(score_specificity, model=self.model, tokenizer=self.tokenizer)
         elif self.type == "diversity-1":

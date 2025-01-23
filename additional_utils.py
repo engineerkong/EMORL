@@ -2,18 +2,18 @@ import numpy as np
 import random
 import torch
 import os
-import json
 import csv
 from scipy import stats
 import time
 import os
 from itertools import combinations, product
-from typing import List, Dict
-from typing import Optional, List, Dict, Tuple
-from transformers import BartTokenizer, BartForConditionalGeneration, BartConfig, BartModel
+from typing import List, Dict, Tuple
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 
 def set_seed(seed: int = 42) -> None:
+    """
+    Function for setting seed, which influences the randomness
+    """
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
@@ -23,35 +23,25 @@ def set_seed(seed: int = 42) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
     print(f"Random seed set as {seed}")
 
-# TODO: use QLORA
 def get_model(model_path: str, max_seq_length: int = 90, lora = False, max_output_length: int = 90):
-
-    print("="*30)
-    print("Load model:", model_path)
-    print("="*30)
+    """
+    Function for loading tokenizer and model (T5-base), as well as set the configurations
+    """
+    print("Load model: ", model_path)
     tokenizer = T5Tokenizer.from_pretrained(model_path)
     model = T5ForConditionalGeneration.from_pretrained(model_path)
     model.config.max_length = max_seq_length
     tokenizer.model_max_length = max_seq_length
     model.config.max_output_length = max_output_length
-    # if lora:                                                                                                                           
-    #     if hasattr(model, "enable_input_require_grads"):
-    #         model.enable_input_require_grads()
-    #     else:
-    #         def make_inputs_require_grad(module, input, output):
-    #             output.requires_grad_(True)
-    #         model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-    #     model = make_lora_model(model, lora_r = 8, lora_alpha = 16, \
-    #             lora_dropout = 0.05, lora_target_modules = [ "q_proj", "v_proj"]) 
     return model, tokenizer
 
 def get_data(data_path: str):
-
-    print("="*30)
-    print("Load data:", data_path)
-    print("="*30)
-    data_split = [0.5, 0.1, 0.4]
-    data = read_umich_pair(data_path, True) + read_umich_pair(data_path, False) 
+    """
+    Function for loading dataset (PAIR) and spliting it into train/dev/test
+    """
+    print("Load data: ", data_path)
+    data_split = [0.8, 0.1, 0.1]
+    data = read_pair(data_path, True) + read_pair(data_path, False) 
     new_data = []
     prompts = set()
     for d in data:
@@ -65,9 +55,9 @@ def get_data(data_path: str):
 
     return train_data, dev_data, test_data
 
-def read_umich_pair(data_path: str, balanced_sampling=False):
+def read_pair(data_path: str, balanced_sampling=False):
     """
-    Function for processing raw UMICH data into MMLE/RL training format
+    Function for processing raw PAIR data into RL training format
     """
     id2header = { 0: "prompt", 1:"hq1", 2:"hq2", 3:"mq1", 4:"lq1", 5:"lq2", 6:"lq3", 7:"lq4", 8:"lq5"}
     with open(data_path, "r") as f:
@@ -85,49 +75,10 @@ def read_umich_pair(data_path: str, balanced_sampling=False):
         res_data += pair_dat
     return res_data
 
-def collate_fn(batch):
-    prompts = [item["prompt"] + " [SEP] " for item in batch]
-    responses = [item["response"] for item in batch]
-    return {"prompts": prompts, "responses": responses}
-    
-def save_args(args, func_name, save_dir):
-   # Create timestamp for filename
-   timestamp = time.strftime("%Y%m%d_%H%M%S")
-   # Create directory if it doesn't exist
-   os.makedirs(save_dir, exist_ok=True)
-   # Create filename with timestamp
-   filename = os.path.join(save_dir, f"args_{timestamp}.txt")
-   # Save arguments to file
-   with open(filename, 'w') as f:
-       f.write(f"Command Line Arguments for {func_name}:\n")
-       f.write("----------------------\n")
-       for arg, value in vars(args).items():
-           f.write(f"{arg}: {value}\n")
-   print(f"Saved arguments to {filename}")
-
-def check_convergence(rewards, window_size=100, std_threshold=0.1):
-    if len(rewards) < window_size:
-        return False
-        
-    recent_rewards = rewards[-window_size:]
-    std = np.std(recent_rewards)
-    mean = np.mean(recent_rewards)
-    
-    cv = std / mean
-    return cv < std_threshold
-
-def slope_convergence(rewards, window_size=100, slope_threshold=0.001):
-    if len(rewards) < window_size:
-        return False
-        
-    recent_rewards = rewards[-window_size:]
-    x = np.arange(window_size)
-    slope, _, _, _, _ = stats.linregress(x, recent_rewards)
-    
-    return abs(slope) < slope_threshold
-
-# TODO: should it not be 2-1,1-0,2-0?
 def generate_combs_pair(dic, balanced_sampling=False):
+    """
+    Function for processing raw PAIR data into RL training format
+    """
     prompt = [dic["prompt"]]    
     hq = combinations([dic["hq1"], dic["hq2"]],1)    
     mq = combinations([dic["mq1"]],1)    
@@ -144,7 +95,10 @@ def generate_combs_pair(dic, balanced_sampling=False):
         lq_dics = random.sample(lq_dics, len(hq_dics))
     return hq_dics + mq_dics + lq_dics
 
-def flatten(l, ltypes=(list, tuple)):    
+def flatten(l, ltypes=(list, tuple)):
+    """
+    Flatten Function
+    """    
     ltype = type(l)    
     l = list(l)    
     i = 0    
@@ -158,3 +112,52 @@ def flatten(l, ltypes=(list, tuple)):
                 l[i:i + 1] = l[i]    
         i += 1    
     return ltype(l)
+
+def collate_fn(batch):
+    """
+    Function for collating dataset and setting seperator token
+    """
+    prompts = [item["prompt"] + " [SEP] " for item in batch]
+    responses = [item["response"] for item in batch]
+    return {"prompts": prompts, "responses": responses}
+    
+def save_args(args, func_name, save_dir):
+    """
+    Function for saving arguments as log file
+    """
+    timestamp = time.strftime("%Y%m%d_%H%M")
+    os.makedirs(save_dir, exist_ok=True)
+    filename = os.path.join(save_dir, f"args_{func_name}_{timestamp}.txt")
+    with open(filename, 'w') as f:
+        f.write(f"Command Line Arguments for {func_name}:\n")
+        f.write("----------------------\n")
+        for arg, value in vars(args).items():
+            f.write(f"{arg}: {value}\n")
+    print(f"Saved arguments to {filename}")
+
+def check_convergence(rewards, window_size=100, std_threshold=0.1):
+    """
+    Function 1 for checking convergence of rewards, default threshold is 0.1
+    """
+    if len(rewards) < window_size:
+        return False
+        
+    recent_rewards = rewards[-window_size:]
+    std = np.std(recent_rewards)
+    mean = np.mean(recent_rewards)
+    
+    cv = std / mean
+    return cv < std_threshold
+
+def slope_convergence(rewards, window_size=100, slope_threshold=0.001):
+    """
+    Function 2 for checking convergence of rewards, default threshold is 0.001
+    """
+    if len(rewards) < window_size:
+        return False
+        
+    recent_rewards = rewards[-window_size:]
+    x = np.arange(window_size)
+    slope, _, _, _, _ = stats.linregress(x, recent_rewards)
+    
+    return abs(slope) < slope_threshold

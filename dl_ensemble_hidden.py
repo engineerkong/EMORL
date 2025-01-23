@@ -9,6 +9,7 @@ import argparse
 import time
 import os
 
+from model_empathy import *
 from dynaopt_lib import *
 from lora_utils import *
 from additional_utils import *
@@ -17,7 +18,7 @@ import numpy as np
 import torch
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 
-def grid_search_hidden_weights(model_list, tokenizer, dataloader, scorer, gen_params, max_output_length=64, grid_size=11, test_batch_size=1, num_runs=1, device="cuda"):
+def grid_search_hidden_weights(model_list, tokenizer, dataloader, scorer, gen_params, max_output_length=64, grid_size=101, test_batch_size=1, num_runs=1, device="cuda"):
     """
     Perform grid search to find the best weights for combining three models' hidden layers.
     
@@ -40,100 +41,101 @@ def grid_search_hidden_weights(model_list, tokenizer, dataloader, scorer, gen_pa
 
     # Loop through all weight combinations
     for w1 in weight_range:
-        for w2 in weight_range:
-            w3 = 1.0 - (w1 + w2)
-            if w3 < 0 or w3 > 1.0:
-                continue  # Skip invalid weight combinations
+        w2 = 1.0 - w1
+        # for w2 in weight_range:
+        #     w3 = 1.0 - (w1 + w2)
+        #     if w3 < 0 or w3 > 1.0:
+        #         continue  # Skip invalid weight combinations
 
-            weights = torch.tensor([w1, w2, w3], device=device)
-            rewards = []
+        weights = torch.tensor([w1, w2], device=device)
+        rewards = []
 
-            current_scores = { k["name"]+"_scores":[] for k in scorer.scorers }
-            for batch in dataloader:
-                
-                # Generate outputs with given prompts
-                responses = batch["responses"]
-                prompts = batch["prompts"]
-                # Encode prompts for input
-                gen_input = tokenizer.batch_encode_plus(prompts, max_length=128, return_tensors="pt", padding="longest", truncation=True)
-                gen_input = {k: v.to(device) for k, v in gen_input.items()}
+        current_scores = { k["name"]+"_scores":[] for k in scorer.scorers }
+        for batch in dataloader:
+            
+            # Generate outputs with given prompts
+            responses = batch["responses"]
+            prompts = batch["prompts"]
+            # Encode prompts for input
+            gen_input = tokenizer.batch_encode_plus(prompts, max_length=128, return_tensors="pt", padding="longest", truncation=True)
+            gen_input = {k: v.to(device) for k, v in gen_input.items()}
 
-                # 扩展输入和解码器输入
-                expanded_input_ids = gen_input["input_ids"].repeat_interleave(num_runs, dim=0)  # (test_batch_size * num_runs, seq_len)
-                expanded_attention_mask = gen_input["attention_mask"].repeat_interleave(num_runs, dim=0)  # (test_batch_size * num_runs, seq_len)
-                decoder_input_ids = torch.full(
-                    (test_batch_size * num_runs, 1),
-                    model_list[0].config.decoder_start_token_id,
-                    dtype=torch.long,
+            # 扩展输入和解码器输入
+            expanded_input_ids = gen_input["input_ids"].repeat_interleave(num_runs, dim=0)  # (test_batch_size * num_runs, seq_len)
+            expanded_attention_mask = gen_input["attention_mask"].repeat_interleave(num_runs, dim=0)  # (test_batch_size * num_runs, seq_len)
+            decoder_input_ids = torch.full(
+                (test_batch_size * num_runs, 1),
+                model_list[0].config.decoder_start_token_id,
+                dtype=torch.long,
+                device=device,
+            )  # (test_batch_size * num_runs, 1)
+
+            generated_tokens = torch.zeros(test_batch_size*num_runs, max_output_length, dtype=torch.long, device=device)
+            # 逐步生成
+            for step in range(max_output_length):
+                hidden_states_combined = torch.zeros(
+                    decoder_input_ids.size(0),  # test_batch_size * num_runs
+                    decoder_input_ids.size(1),  # 当前解码长度
+                    model_list[0].config.d_model,  # 模型隐藏层维度
+                    dtype=torch.float,
                     device=device,
-                )  # (test_batch_size * num_runs, 1)
+                )
 
-                generated_tokens = torch.zeros(test_batch_size*num_runs, max_output_length, dtype=torch.long, device=device)
-                # 逐步生成
-                for step in range(max_output_length):
-                    hidden_states_combined = torch.zeros(
-                        decoder_input_ids.size(0),  # test_batch_size * num_runs
-                        decoder_input_ids.size(1),  # 当前解码长度
-                        model_list[0].config.d_model,  # 模型隐藏层维度
-                        dtype=torch.float,
-                        device=device,
+                # 加权组合每个模型的隐藏状态
+                for model_idx, model in enumerate(model_list):
+                    outputs = model(
+                        input_ids=expanded_input_ids,
+                        attention_mask=expanded_attention_mask,
+                        decoder_input_ids=decoder_input_ids,
+                        output_hidden_states=True,
+                        return_dict=True,
                     )
+                    hidden_states_combined += weights[model_idx] * outputs.decoder_hidden_states[-1]
 
-                    # 加权组合每个模型的隐藏状态
-                    for model_idx, model in enumerate(model_list):
-                        outputs = model(
-                            input_ids=expanded_input_ids,
-                            attention_mask=expanded_attention_mask,
-                            decoder_input_ids=decoder_input_ids,
-                            output_hidden_states=True,
-                            return_dict=True,
-                        )
-                        hidden_states_combined += weights[model_idx] * outputs.decoder_hidden_states[-1]
+                # 计算 logits 并确定下一个 token
+                logits = model_list[0].lm_head(hidden_states_combined) # 模型的lm_head均一致
+                next_token = torch.argmax(logits[:, -1, :], dim=-1)  # shape: (test_batch_size * num_runs,)
 
-                    # 计算 logits 并确定下一个 token
-                    logits = model_list[0].lm_head(hidden_states_combined) # 模型的lm_head均一致
-                    next_token = torch.argmax(logits[:, -1, :], dim=-1)  # shape: (test_batch_size * num_runs,)
+                # 更新 generated_tokens
+                generated_tokens[:, step] = next_token  # 将生成的 token 存储在对应列
 
-                    # 更新 generated_tokens
-                    generated_tokens[:, step] = next_token  # 将生成的 token 存储在对应列
+                # 更新解码器输入
+                decoder_input_ids = torch.cat([decoder_input_ids, next_token.unsqueeze(-1)], dim=1)
 
-                    # 更新解码器输入
-                    decoder_input_ids = torch.cat([decoder_input_ids, next_token.unsqueeze(-1)], dim=1)
+                # 检查是否所有序列都生成结束标记
+                if (next_token == model_list[0].config.eos_token_id).all():
+                    break
 
-                    # 检查是否所有序列都生成结束标记
-                    if (next_token == model_list[0].config.eos_token_id).all():
-                        break
+            generateds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+            generateds = [ g.split("[CLS]") for g in generateds]
+            new_generateds = []
+            for g_list in generateds:
+                if len(g_list) <= 1:
+                    new_generateds.append([g_list[0].strip()])
+                else:
+                    new_generateds.append([x.strip() for x in g_list[:-1]])
+            generateds = new_generateds
+            cls_generateds = [ [ x.strip() + " [CLS]" for x in g] for g in generateds ]
+            cls_generateds = [ " ".join(g) for g in cls_generateds]
+            generateds = [ " ".join(g) for g in generateds]
+            generateds = [ g.replace("<pad>", "").strip() for g in generateds]
+            generateds = [g.replace("[CLS]", "").strip() for g in generateds]
+            prompts = [p for p in prompts for _ in range(num_runs)]
+            responses = [r for r in responses for _ in range(num_runs)]
 
-                generateds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
-                generateds = [ g.split("[CLS]") for g in generateds]
-                new_generateds = []
-                for g_list in generateds:
-                    if len(g_list) <= 1:
-                        new_generateds.append([g_list[0].strip()])
-                    else:
-                        new_generateds.append([x.strip() for x in g_list[:-1]])
-                generateds = new_generateds
-                cls_generateds = [ [ x.strip() + " [CLS]" for x in g] for g in generateds ]
-                cls_generateds = [ " ".join(g) for g in cls_generateds]
-                generateds = [ " ".join(g) for g in generateds]
-                generateds = [ g.replace("<pad>", "").strip() for g in generateds]
-                generateds = [g.replace("[CLS]", "").strip() for g in generateds]
-                prompts = [p for p in prompts for _ in range(num_runs)]
-                responses = [r for r in responses for _ in range(num_runs)]
+            scorer_returns = scorer.rl_score(inputs=prompts, generateds=generateds, responses=responses)
+            for k,v in scorer_returns.items():
+                if k in current_scores:
+                    current_scores[k].extend(v)
 
-                scorer_returns = scorer.rl_score(inputs=prompts, generateds=generateds, responses=responses)
-                for k,v in scorer_returns.items():
-                    if k in current_scores:
-                        current_scores[k].extend(v)
-
-            # Calculate mean reward for this weight combination    
-            rewards = [ np.mean(v) for k,v in current_scores.items() ]
-            mean_reward = np.mean(rewards)
-            if mean_reward > best_mean_reward:
-                best_mean_reward = mean_reward
-                best_weights = weights.cpu().numpy()
-            print(f"Weights:{weights}")
-            print(f"Rewards:{rewards}")
+        # Calculate mean reward for this weight combination    
+        rewards = [ np.mean(v) for k,v in current_scores.items() ]
+        mean_reward = np.mean(rewards[:2])
+        if mean_reward > best_mean_reward:
+            best_mean_reward = mean_reward
+            best_weights = weights.cpu().numpy()
+        print(f"Weights:{weights}")
+        print(f"Rewards:{rewards}")
 
     return {
         "best_weights": best_weights,
@@ -182,8 +184,8 @@ def ensemble(args):
 
     # Load data
     train_data, val_data, test_data = get_data(args.data_path)
-    test_dataloader = DataLoader(dataset=test_data[:4], batch_size=args.test_batch_size,\
-        sampler=RandomSampler(test_data[:4]), drop_last=True, collate_fn=collate_fn)
+    test_dataloader = DataLoader(dataset=test_data, batch_size=args.test_batch_size,\
+        sampler=RandomSampler(test_data), drop_last=True, collate_fn=collate_fn)
 
     # Load original model 
     model, tokenizer = get_model(
@@ -205,16 +207,19 @@ def ensemble(args):
         "num_return_sequences": args.num_runs,
         "temperature": 1.0
     }
-
-    # Define scorer
-    scorer_model = ReflectionScoreDeployedCL(score_change=False, model_file= "./weights/reflection_scorer_weight.pt")
-    scorer_model.type = "CLM"
-    scorers = [{"name": "reflection", "model": scorer_model, "sign": 1, "weight": 1.0, "train": True},
+    
+    # Create validation criterion and scorer
+    reflection_scorer_model = ReflectionScoreDeployedCL(score_change=False, model_file= "./weights/reflection_scorer_weight.pt")
+    reflection_scorer_model.type = "CLM"
+    empathy_scorer_model = EmpathyScoreDeployedCL(score_change=False)
+    empathy_scorer_model.type = "CLM"
+    scorers = [{"name": "reflection", "model": reflection_scorer_model, "sign": 1, "weight": 1.0, "train": True},
+                {"name": "empathy", "model": empathy_scorer_model, "sign": 1, "weight": 1.0, "train": True},
                 {"name": "fluency", "model": Multi(type="fluency"), "sign": 1, "weight": 1.0, "train": True},
-                {"name": "coherence", "model": Multi(type="coherence"), "sign": 1, "weight": 1.0, "train": True}]
-    scorer = ScorerWrapper(scorers, learning_mode = "bandit_weighted", \
-            scoring_method="logsum", max_batch_size=12)
-
+                {"name": "coherence", "model": Multi(type="coherence"), "sign": 1, "weight": 1.0, "train": True},
+                {"name": "specificity", "model": Multi(type="specificity"), "sign": 1, "weight": 1.0, "train": True}]
+    scorer = ScorerWrapper(scorers, learning_mode = "bandit_weighted", scoring_method="logsum", max_batch_size=12)
+    
     # Gather models individual objectives
     model_list = []
     for i in range(len(args.objectives)):
@@ -236,7 +241,7 @@ def ensemble(args):
         dataloader=test_dataloader,
         scorer=scorer,
         gen_params=gen_params,
-        grid_size=11,  # e.g., weights range from 0.0 to 1.0 in 0.1 steps
+        grid_size=101,  # e.g., weights range from 0.0 to 1.0 in 0.1 steps
         test_batch_size=args.test_batch_size,
         num_runs=args.num_runs,
         device=device

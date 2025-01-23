@@ -47,7 +47,7 @@ class ScorerWrapper:
                     pass
                 else:
                     self.weight_bandit(1, chosen)
-                    print("Weight Bandit:", self.weight_bandit.weights)
+                    # print("Weight Bandit:", self.weight_bandit.weights)
                     weights = self.weight_bandit.weights
                     weights = weights / np.sum(weights)
                     self.used_scorers = self.scorers
@@ -246,7 +246,7 @@ def fixed_logsum_score(scorers, paragraphs, generateds, partial=False, printing=
         
         # load fixed weight
         scorer_name = scorer["name"]
-        weight = extra[scorer_name]
+        weight = extras[scorer_name]
         
         if not scorer["name"].endswith("perplexity"):
             scores["scores"] = np.clip(scores["scores"], 0.0001, 0.9999)
