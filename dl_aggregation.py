@@ -307,6 +307,15 @@ def hierarchical_search(args, seed=5326, precision_levels=[0.1, 0.01], device="c
 
     return best_values
 
+def verify_lora(args, seed=5326, precision_levels=[0.1, 0.01], device="cuda", val_dataloader=None, tokenizer=None, model=None, \
+                        original_params=None, model_list=[], val_scorer=None, gen_params=None, aggregation_func=states_func):
+    wandb.init(project="DMORL", mode="disabled")
+    # Select only 0 and 1 for aggregating
+    weight_ranges= [np.array([0,2,1]), np.array([0,2,1]), np.array([0,2,1])]
+    best_weights, best_reward = aggregation_func(args, device, val_dataloader, tokenizer, model, original_params, model_list, \
+                                                val_scorer, gen_params, weight_ranges=weight_ranges)
+    wandb.finish()
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--num_seeds', type=int, default=3)
@@ -327,6 +336,7 @@ def main():
     save_dir = os.path.join(args.output_path, timestamp)
     os.makedirs(save_dir, exist_ok=True)
     components = config_aggregation(args)
+    # verify_lora(args, **components, aggregation_func=states_func) # verify the lora performance
 
     seeds = [random.randint(1, 100000) for _ in range(args.num_seeds)]
     for seed in seeds:

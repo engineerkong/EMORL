@@ -67,12 +67,12 @@ def config_training(args, objective, seed):
     objectives = [objective] if args.training_mode == "distributed" else objective
     scorers = [get_scorer(obj) for obj in objectives]
     rl_crit = ReinforceCriterion(model, tokenizer, optimizer, scaler, ref_model=ref_model, kl_coeff=0.05)
-    scorer = ScorerWrapper(scorers, learning_mode, scoring_method="logsum", max_batch_size=12)
+    scorer = ScorerWrapper(scorers, learning_mode, scoring_method="fixed_logsum" if args.training_mode=="fixed" else "logsum", max_batch_size=12)
    
     # Create validation criterion and scorer
     val_objectives = ["reflection", "empathy", "fluency", "coherence", "specificity"]
     val_scorers = [get_scorer(obj) for obj in val_objectives]
-    val_scorer = ScorerWrapper(val_scorers, learning_mode, scoring_method="logsum", max_batch_size=12)
+    val_scorer = ScorerWrapper(val_scorers, learning_mode, scoring_method="fixed_logsum" if args.training_mode=="fixed" else "logsum", max_batch_size=12)
 
     # Define generation parameters
     gen_params = {
@@ -165,7 +165,9 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
 
             # Calculate scorers - kSCST
             scorer_returns = scorer.score(prompts, generateds, responses=responses, step_count=step_count, \
-                                          bandit=None if args.training_mode=="distributed" else bandit, chosen=None if args.training_mode=="distributed" else chosen)
+                                          bandit=bandit if args.training_mode=="centralized" else None, \
+                                          chosen=chosen if args.training_mode=="centralized" else None, \
+                                          extras=args.weights_dict if args.training_mode=="fixed" else {})
             total_scores = torch.FloatTensor(scorer_returns["total_scores"]).cuda()
             batch_scores = total_scores.reshape(args.train_batch_size, args.num_runs)
             mean_scores = batch_scores.mean(dim=1)
@@ -214,7 +216,8 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
                     generateds = [g.replace("[CLS]", "").strip() for g in generateds]
                     prompts = [p for p in prompts for _ in range(args.num_runs)]
                     responses = [r for r in responses for _ in range(args.num_runs)]
-                    scorer_returns = val_scorer.rl_score(prompts, generateds, responses=responses, step_count=step_count, bandit=None)
+                    scorer_returns = val_scorer.rl_score(prompts, generateds, responses=responses, step_count=step_count, \
+                                                         extras=args.weights_dict if args.training_mode=="fixed" else {})
                     for k,v in scorer_returns.items():
                         if k in current_scores:
                             current_scores[k].extend(v)
@@ -279,16 +282,17 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--num_seeds', type=int, default=3)
-    parser.add_argument('--training_mode', type=str, default="distributed", help="distributed/centralized")
+    parser.add_argument('--training_mode', type=str, default="distributed", help="options: distributed/centralized/fixed")
     parser.add_argument('--model_path', type=str, default="models/t5-base")
     parser.add_argument('--data_path', type=str, default="data/PAIR/pair_data.csv")
     parser.add_argument('--output_path', type=str, default="lora_results/")
-    parser.add_argument('--objectives', nargs='+', default=["reflection", "empathy"])
+    parser.add_argument('--objectives', nargs='+', default=["reflection", "empathy", "fluency"])
     parser.add_argument('--train_batch_size', type=int, default=16)
     parser.add_argument('--val_batch_size', type=int, default=16)
     parser.add_argument('--val_interval_size', type=int, default=16)
     parser.add_argument('--num_runs', type=int, default=3)
     parser.add_argument('--num_steps', type=int, default=10)
+    parser.add_argument('--weights_dict', type=dict, default={"reflection": 1/3, "empathy": 1/3, "fluency": 1/3})
     parser.add_argument('--do_wandb', type=int, default=0)
     
     args = parser.parse_args()
@@ -331,11 +335,19 @@ def main():
         elif args.training_mode == "centralized":
             components.update(config_training(args, args.objectives, seed))
             all_params = train(args, **components)
-            # Save Centralized model
+            # Save centralized model
             filename = f"centralized_{seed}.pt"
             save_path = os.path.join(save_dir, filename)
             torch.save(all_params, save_path)
             print(f"Saved centralized model to {save_path}")
+        elif args.training_mode == "fixed":
+            components.update(config_training(args, args.objectives, seed))
+            all_params = train(args, **components)
+            # Save fixed model
+            filename = f"fixed_{seed}.pt"
+            save_path = os.path.join(save_dir, filename)
+            torch.save(all_params, save_path)
+            print(f"Saved fixed model to {save_path}")
         else:
             raise("Training Mode Wrong!")
 
