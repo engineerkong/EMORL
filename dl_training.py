@@ -63,7 +63,7 @@ def config_training(args, objective, seed):
         "default": lambda o: {
             "model": Multi(type=o)}
     }
-    learning_mode = "single" if args.training_mode == "distributed" else "bandit_weighted"
+    learning_mode = "bandit_weighted" if args.training_mode == "centralized" else "single"
     objectives = [objective] if args.training_mode == "distributed" else objective
     scorers = [get_scorer(obj) for obj in objectives]
     rl_crit = ReinforceCriterion(model, tokenizer, optimizer, scaler, ref_model=ref_model, kl_coeff=0.05)
@@ -291,7 +291,7 @@ def main():
     parser.add_argument('--val_batch_size', type=int, default=16)
     parser.add_argument('--val_interval_size', type=int, default=16)
     parser.add_argument('--num_runs', type=int, default=3)
-    parser.add_argument('--num_steps', type=int, default=10)
+    parser.add_argument('--num_steps', type=int, default=16)
     parser.add_argument('--weights_dict', type=dict, default={"reflection": 1/3, "empathy": 1/3, "fluency": 1/3})
     parser.add_argument('--do_wandb', type=int, default=0)
     

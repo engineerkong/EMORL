@@ -246,7 +246,10 @@ def fixed_logsum_score(scorers, paragraphs, generateds, partial=False, printing=
         
         # load fixed weight
         scorer_name = scorer["name"]
-        weight = extras[scorer_name]
+        if scorer_name in extras.keys():
+            weight = extras[scorer_name]
+        else:
+            weight = 1/3 # default value, doesn't matter
         
         if not scorer["name"].endswith("perplexity"):
             scores["scores"] = np.clip(scores["scores"], 0.0001, 0.9999)
