@@ -5,7 +5,7 @@
 /lora_results/*
 /aggregation_results/*
 /experiment_results/*
-/test/*
+/tmp/*
 /wandb/*
 /logs/*
 __pycache__/

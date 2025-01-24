@@ -12,7 +12,7 @@ from dynaopt_lib import *
 from utils_lora import *
 from utils_additional import *
 
-def config(args, objective, seed):
+def config_training(args, objective, seed):
     # Load device
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -103,10 +103,10 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
              rl_crit, scorer, val_scorer, gen_params, objective, seed):
     # Initialize wandb
     if args.do_wandb:
-        wandb.init(project="DMOL", group="TRAINING", name=f"training_{args.training_mode}_{objective}_{seed}")
+        wandb.init(project="DMORL", group="TRAINING", name=f"training_{args.training_mode}_{objective}_{seed}")
         wandb.define_metric("mean_reward", step_metric="data_consuming")
     else:
-        wandb.init(project="DMOL", mode="disabled")
+        wandb.init(project="DMORL", mode="disabled")
 
     # Initialize bandit
     if args.training_mode == "centralized":
@@ -185,7 +185,7 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
             
             # Update step_count when one batch is finished
             step_count += 1
-            data_consuming += len(batch)
+            data_consuming += args.train_batch_size
 
             # Validation model with val dataset
             current_scores = { k["name"]+"_scores":[] for k in val_scorer.scorers }
@@ -261,7 +261,7 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
                 mean_mr = np.mean([mean_reward[i] for i in indices])
                 rewards_history.append(mean_mr)
                 wandb.log({"mean_reward": mean_mr, "data_consuming": data_consuming})
-                if slope_convergence(rewards_history):
+                if check_convergence(rewards_history):
                     print("Training converged!")
                     print(f"Entire data consuming: {data_consuming}")
                     print(f"Entire time consuming: {time.time() - T_train_start}")
@@ -284,9 +284,9 @@ def main():
     parser.add_argument('--data_path', type=str, default="data/PAIR/pair_data.csv")
     parser.add_argument('--output_path', type=str, default="lora_results/")
     parser.add_argument('--objectives', nargs='+', default=["reflection", "empathy"])
-    parser.add_argument('--train_batch_size', type=int, default=8)
-    parser.add_argument('--val_batch_size', type=int, default=8)
-    parser.add_argument('--val_interval_size', type=int, default=8)
+    parser.add_argument('--train_batch_size', type=int, default=16)
+    parser.add_argument('--val_batch_size', type=int, default=16)
+    parser.add_argument('--val_interval_size', type=int, default=16)
     parser.add_argument('--num_runs', type=int, default=3)
     parser.add_argument('--num_steps', type=int, default=10)
     parser.add_argument('--do_wandb', type=int, default=0)
@@ -321,7 +321,7 @@ def main():
             # Train on multiple objective seperately
             for objective in args.objectives:
                 print(f"Start training for objective: {objective}")
-                components.update(config(args, objective, seed))
+                components.update(config_training(args, objective, seed))
                 lora_params = train(args, **components)            
                 # Save LORA parameters
                 filename = f"lora_{objective}_{seed}.npz"
@@ -329,7 +329,7 @@ def main():
                 save_lora(lora_params, npz_path=npz_path)
                 print(f"Saved LORA parameters to {npz_path}")
         elif args.training_mode == "centralized":
-            components.update(config(args, args.objectives, seed))
+            components.update(config_training(args, args.objectives, seed))
             all_params = train(args, **components)
             # Save Centralized model
             filename = f"centralized_{seed}.pt"

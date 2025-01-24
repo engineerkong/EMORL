@@ -147,6 +147,7 @@ def check_convergence(rewards, window_size=100, std_threshold=0.1):
     mean = np.mean(recent_rewards)
     
     cv = std / mean
+    print(f"std/mean cv value:{cv}")
     return cv < std_threshold
 
 def slope_convergence(rewards, window_size=100, slope_threshold=0.001):
