@@ -134,7 +134,7 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
     while step_count < args.num_steps and training:
         print(f"Step count:{step_count}")
         
-        # Training on train dataset
+        # Training on train dataset, batches 15
         for batch in train_dataloader:
             # Generate outputs with given prompts
             prompts = batch["prompts"]
@@ -288,8 +288,8 @@ def main():
     parser.add_argument('--output_path', type=str, default="lora_results/")
     parser.add_argument('--objectives', nargs='+', default=["reflection", "empathy", "fluency"])
     parser.add_argument('--train_batch_size', type=int, default=16)
-    parser.add_argument('--val_batch_size', type=int, default=16)
-    parser.add_argument('--val_interval_size', type=int, default=16)
+    parser.add_argument('--val_batch_size', type=int, default=8)
+    parser.add_argument('--val_interval_size', type=int, default=8)
     parser.add_argument('--num_runs', type=int, default=3)
     parser.add_argument('--num_steps', type=int, default=16)
     parser.add_argument('--weights_dict', type=dict, default={"reflection": 1/3, "empathy": 1/3, "fluency": 1/3})
