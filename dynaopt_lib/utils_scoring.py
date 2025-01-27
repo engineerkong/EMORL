@@ -53,7 +53,7 @@ class ScorerWrapper:
                     self.used_scorers = self.scorers
                     for i, scorer in enumerate(self.used_scorers):
                         scorer["weight"] = weights[i]
-                    print([scorer["weight"] for scorer in self.used_scorers])
+                    # print([scorer["weight"] for scorer in self.used_scorers])
         elif self.learning_mode == "argmin":
             if chosen != None:
                 self.weight_bandit(1, chosen)

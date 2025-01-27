@@ -7,7 +7,7 @@ class EmpathyScoreDeployedCL:
     """
     def __init__(self, same_length=False, score_change=False):
         self.same_length = same_length
-        model_path = "MoaazZaki/bert-empathy"
+        model_path = "models/bert-empathy"
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         self.model = AutoModelForSequenceClassification.from_pretrained(model_path)
         self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
