@@ -103,7 +103,7 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
              rl_crit, scorer, val_scorer, gen_params, objective, seed):
     # Initialize wandb
     if args.do_wandb:
-        wandb.init(project="DMORL", group="TRAINING", name=f"training_{args.training_mode}_{objective}_{seed}")
+        wandb.init(project="DMORL-1", group="TRAINING", name=f"training_{args.training_mode}_{objective}_{seed}")
         wandb.define_metric("mean_reward", step_metric="data_consuming")
     else:
         wandb.init(project="DMORL", mode="disabled")
@@ -111,17 +111,17 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
     # Initialize bandit
     if args.training_mode == "centralized":
         bandit = Exp3(len(objective)+1)
-        bandit_history = []
-        bandit_weight_history = []
-        bandit_arm_weight_history = []
+        # bandit_history = []
+        # bandit_weight_history = []
+        # bandit_arm_weight_history = []
         chosen = bandit.draw()
         last_chosen = chosen
         # print("Bandit arm pulled:", chosen)
         rl_scorer_history = { k["name"]+"_scores":[] for k in val_scorer.scorers }
         bandit_pulls = { i:0 for i in range(len(scorer.scorers)+1) } 
         bandit_pulls[last_chosen] += 1
-        bandit_history.append(last_chosen)
-        bandit_arm_weight_history.append(bandit.weights.copy())
+        # bandit_history.append(last_chosen)
+        # bandit_arm_weight_history.append(bandit.weights.copy())
         # print("Bandit Pull:", bandit_pulls)
         # print("Bandit Weights:", bandit.weights)
 
@@ -241,20 +241,21 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
                             scaled.append(np.mean(current_scores[k])-np.mean(history))
 
                     bandit(np.mean(scaled), last_chosen) 
-                    bandit_arm_weight_history.append(bandit.weights.copy())
+                    # bandit_arm_weight_history.append(bandit.weights.copy())
                     weights = scorer.weight_bandit.weights
                     weights = weights / np.sum(weights) 
-                    bandit_weight_history.append(weights.tolist())
+                    # bandit_weight_history.append(weights.tolist())
                     chosen = bandit.draw()
                     last_chosen = chosen
                     bandit_pulls[last_chosen] += 1
-                    bandit_history.append(last_chosen)
+                    # bandit_history.append(last_chosen)
                     # print(f"Step {step_count} / Chosen arm: {chosen}")
                     # print("Bandit Pull:", bandit_pulls)
                     # print("Bandit weights:", bandit.weights)
                     for k,v in current_scores.items():
                         rl_scorer_history[k].extend(v)
-                
+                        rl_scorer_history[k] = rl_scorer_history[k][-HISTORY_SIZE:]
+
                 # Record using wandb and check convergence
                 all_objectives = ["reflection", "empathy", "fluency", "coherence", "specificity"]
                 if isinstance(objective, str):
