@@ -150,7 +150,7 @@ def check_convergence(rewards, window_size=50, std_threshold=0.01):
     print(f"std/mean cv value:{cv}")
     return cv < std_threshold
 
-def slope_convergence(rewards, window_size=100, slope_threshold=0.001):
+def slope_convergence(rewards, window_size=50, slope_threshold=0.001):
     """
     Function 2 for checking convergence of rewards, default threshold is 0.001
     """
