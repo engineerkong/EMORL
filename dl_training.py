@@ -103,7 +103,7 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
              rl_crit, scorer, val_scorer, gen_params, objective, seed):
     # Initialize wandb
     if args.do_wandb:
-        wandb.init(project="DMORL", group="TRAINING", name=f"training_{args.training_mode}_{objective}_{seed}")
+        wandb.init(project="DMORL-1", group="TRAINING", name=f"training_{args.training_mode}_{objective}_{seed}")
         wandb.define_metric("mean_reward", step_metric="data_consuming")
     else:
         wandb.init(project="DMORL", mode="disabled")
