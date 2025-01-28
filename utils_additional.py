@@ -135,7 +135,7 @@ def save_args(args, func_name, save_dir):
             f.write(f"{arg}: {value}\n")
     print(f"Saved arguments to {filename}")
 
-def check_convergence(rewards, window_size=40, std_threshold=0.02):
+def check_convergence(rewards, window_size=50, std_threshold=0.01):
     """
     Function 1 for checking convergence of rewards, default threshold is 0.1
     """
