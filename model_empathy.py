@@ -44,8 +44,8 @@ class EmpathyScoreDeployedCL:
             up_to_length = len(self.tokenizer.encode(generateds[0]))
         c_prompts_u_responses, c_prompts_model_responses = self.preprocess_batch(sources, generateds)
         with torch.no_grad():
-            score_pm = self.model(**c_prompts_model_responses)[0][0].detach().sigmoid().squeeze()
-            score_pu = self.model(**c_prompts_u_responses)[0][0].detach().sigmoid().squeeze()
+            score_pm = self.model(**c_prompts_model_responses)[0].detach().squeeze()
+            score_pu = self.model(**c_prompts_u_responses)[0].detach().squeeze()
         scores = score_pm - score_pu 
         scores = scores.tolist()
         if printing:

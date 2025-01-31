@@ -6,6 +6,7 @@ import csv
 from scipy import stats
 import time
 import os
+import json
 from itertools import combinations, product
 from typing import List, Dict, Tuple
 from transformers import T5Tokenizer, T5ForConditionalGeneration
@@ -53,6 +54,36 @@ def get_data(data_path: str):
     dev_data = data[int(len(data)*data_split[0]):int(len(data)*(data_split[0]+data_split[1]))]
     test_data = data[int(len(data)*(data_split[0]+data_split[1])):]
 
+    return train_data, dev_data, test_data
+
+def get_esconv(data_path: str):
+    print("Load data: ", data_path)
+    data_split = [0.8, 0.1, 0.1]
+    new_data = []
+    with open(data_path, 'r') as f:
+        data = json.load(f)
+    for d in data:
+        data_dict = {"prompt": d["situation"], "response": d["problem_type"]}
+        new_data.append(data_dict)
+    data = new_data
+    train_data = data[:int(len(data)*data_split[0])]
+    dev_data = data[int(len(data)*data_split[0]):int(len(data)*(data_split[0]+data_split[1]))]
+    test_data = data[int(len(data)*(data_split[0]+data_split[1])):]
+    return train_data, dev_data, test_data
+
+def get_p8k(data_path: str):
+    print("Load data: ", data_path)
+    data_split = [0.8, 0.1, 0.1]
+    new_data = []
+    with open(data_path, 'r') as f:
+        data = json.load(f)
+    for d in data:
+        data_dict = {"prompt": d["input"], "response": d["output"]}
+        new_data.append(data_dict)
+    data = new_data
+    train_data = data[:int(len(data)*data_split[0])]
+    dev_data = data[int(len(data)*data_split[0]):int(len(data)*(data_split[0]+data_split[1]))]
+    test_data = data[int(len(data)*(data_split[0]+data_split[1])):]
     return train_data, dev_data, test_data
 
 def read_pair(data_path: str, balanced_sampling=False):

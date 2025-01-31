@@ -17,3 +17,4 @@ scikit-learn
 tqdm
 python-Levenshtein
 colorama
+openpyxl

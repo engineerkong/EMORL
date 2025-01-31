@@ -2,6 +2,7 @@ from peft import LoraConfig, get_peft_model
 import os
 import numpy as np
 from torch import nn
+import torch
 
 def find_all_linear_names(model):
     """
@@ -61,7 +62,7 @@ def save_lora(lora_params, npz_path):
 
 def load_lora(npz_path):
     """
-    Function for loading LORA parameters from .npz file
+    Function for loading LORA parameters from .npz file and converting to CUDA tensors
     """
     loaded = np.load(npz_path)
     lora_params = {}
@@ -69,12 +70,14 @@ def load_lora(npz_path):
         name, param_type = key.rsplit('_', 1)
         if name not in lora_params:
             lora_params[name] = [None, None, None]
+        tensor_value = torch.from_numpy(loaded[key]).cuda()
         if param_type == 'loraA':
-            lora_params[name][0] = loaded[key]
+            lora_params[name][0] = tensor_value
         elif param_type == 'loraB':
-            lora_params[name][1] = loaded[key]
+            lora_params[name][1] = tensor_value
         elif param_type == 'scaling':
-            lora_params[name][2] = loaded[key]
+            lora_params[name][2] = tensor_value
+    lora_params = {k: tuple(v) for k, v in lora_params.items()}
     return lora_params
 
 def adjust_weights(weights, key, all_lora_params):
