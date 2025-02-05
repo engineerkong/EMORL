@@ -55,7 +55,7 @@ def config_testing(args):
         "default": lambda o: {
             "model": Multi(type=o, score_change=False)}
     }
-    test_objectives = ["reflection", "empathy", "fluency", "coherence", "specificity", "diversity-2", "edit_rate"]
+    test_objectives = ["reflection", "empathy", "fluency", "coherence", "specificity", "diveristy-2", "edit_rate"]
     test_scorers = [get_scorer(obj) for obj in test_objectives]
     test_scorer = ScorerWrapper(test_scorers, learning_mode="bandit_weighted", scoring_method="logsum", max_batch_size=12)
 
@@ -101,15 +101,16 @@ def test(args, device, test_dataloader, tokenizer, model, test_scorer, gen_param
             new_model.load_state_dict(updated_params)
             model_list.append(new_model)
     else:
-        raise("Model params don't exist!")
+        pass
     print(f"Load model: {args.model_params}")
+
     weights = [np.float64(0.78125), np.float64(0.5), np.float64(0.0625)]
     # Testing loop
     prompts_list, generateds_list = [], []
     current_scores = { k["name"]+"_scores":[] for k in test_scorer.scorers }
-    for n in range(1):
+    for n in range(4):
         for i, batch in enumerate(test_dataloader):
-            if i >= 8:
+            if i >= 4:
                 break
             # Generate outputs with given prompts
             responses = batch["responses"]
@@ -118,7 +119,7 @@ def test(args, device, test_dataloader, tokenizer, model, test_scorer, gen_param
             gen_input = tokenizer.batch_encode_plus(prompts, max_length=128, return_tensors="pt", padding="longest", truncation=True)
             gen_input = {k: v.to(device) for k, v in gen_input.items()}
 
-            if os.path.isfile(args.model_params):
+            if os.path.isfile(args.model_params) or args.model_params == "":
                 # Generate outputs with given prompts
                 responses = batch["responses"]
                 prompts = batch["prompts"]
@@ -213,24 +214,28 @@ def test(args, device, test_dataloader, tokenizer, model, test_scorer, gen_param
     #     "generateds": generateds_list
     #     }
     # df = pd.DataFrame(data)
-    # with pd.ExcelWriter("output.xlsx") as writer:
-    #     df.to_excel(writer, sheet_name=f"uniform weighted", index=False)
+    # try:
+    #     with pd.ExcelWriter(args.output_path, mode='a') as writer:
+    #         df.to_excel(writer, sheet_name=args.model_params, index=False)
+    # except:
+    #     with pd.ExcelWriter(args.output_path, mode='w') as writer:
+    #         df.to_excel(writer, sheet_name=args.model_params, index=False)
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', type=str, default="models/t5-base")
     parser.add_argument('--test_datasets', type=str, default="P8K")
     parser.add_argument('--data_path', type=str, default="data/P8K/Psycho8k.json")
-    parser.add_argument('--model_params', type=str, default="aggregation_results/lora_combi_5/")
+    parser.add_argument('--model_params', type=str, default="")
     parser.add_argument('--objectives', nargs='+', default=["reflection", "empathy", "fluency"])
-    parser.add_argument('--output_path', type=str, default="output.xlsx")
+    parser.add_argument('--output_path', type=str, default="output_psycho8k.xlsx")
     parser.add_argument('--test_batch_size', type=int, default=16)
     parser.add_argument('--num_runs', type=int, default=1)
     
     args = parser.parse_args()
     # save_args(args, "DL_TESTING", "logs/")
 
-    set_seed(37186) # Use one random seed for the testing
+    set_seed(567654) # Use one random seed for the testing
     components = config_testing(args)
 
     test(args, **components)

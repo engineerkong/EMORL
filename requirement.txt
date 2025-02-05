@@ -18,3 +18,4 @@ tqdm
 python-Levenshtein
 colorama
 openpyxl
+matplotlib

@@ -320,6 +320,7 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
     best_point = None
     best_score = float('-inf')
     
+    T_aggregation_start = time.time()
     for iter_num in range(iterations):
         print(f"\nIteration {iter_num + 1}:")
         
@@ -345,6 +346,8 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
         current_bounds = get_new_bounds(best_region)
         print(f"New bounds: {current_bounds}")
     
+    aggregation_time = time.time() - T_aggregation_start
+    print(f"Entire aggregation time: {aggregation_time}")
     wandb.finish()
 
     file_path = os.path.join(args.lora_path, "output.txt")  # 组合文件夹路径和文件名
@@ -366,7 +369,7 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--num_seeds', type=int, default=3)
-    parser.add_argument('--aggregation_mode', type=str, default="states", help="states/params")
+    parser.add_argument('--aggregation_mode', type=str, default="states", help="states/params/logits")
     parser.add_argument('--model_path', type=str, default="models/t5-base")
     parser.add_argument('--data_path', type=str, default="data/PAIR/pair_data.csv")
     parser.add_argument('--lora_path', type=str, default="aggregation_results/lora_combi_5/")
