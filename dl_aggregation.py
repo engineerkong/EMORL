@@ -425,13 +425,13 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
     print(f"Entire aggregation time: {aggregation_time}")
     wandb.finish()
 
-    txt_path = os.path.join(args.lora_path, "output3.txt")  # 组合文件夹路径和文件名
+    txt_path = os.path.join(args.lora_path, "output3.txt")  # Combine folder path and filename
     # Write to file
     with open(txt_path, 'w') as f:
         f.write(f"Best score: {best_score}\n")
         f.write(f"Best weights: {best_point}\n")
 
-    json_path = os.path.join(args.lora_path, "output3.json")  # 组合文件夹路径和文件名
+    json_path = os.path.join(args.lora_path, "output3.json")  # Combine folder path and filename
     with open(json_path, 'w') as f:
         json.dump(df, f)
     return best_point, best_score
