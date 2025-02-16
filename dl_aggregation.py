@@ -98,22 +98,10 @@ def config_aggregation(args):
         'gen_params': gen_params
     }
 
-# TODO logits_func()
 def logits_func(weights, args, df, device, val_dataloader, tokenizer, model, original_params, model_list, val_scorer, gen_params):
 
     current_scores = { k["name"]+"_scores":[] for k in val_scorer.scorers }
     for batch in val_dataloader:
-
-        # # Generate outputs with given prompts
-        # responses = batch["responses"]
-        # prompts = batch["prompts"]
-        # # Encode prompts for input
-        # gen_input = tokenizer.batch_encode_plus(prompts, max_length=128, return_tensors="pt", padding="longest", truncation=True)
-        # gen_input = {k: v.to(device) for k, v in gen_input.items()}
-
-        # # Expand input ids and attention masks according to num_runs
-        # expanded_input_ids = gen_input["input_ids"].repeat_interleave(args.num_runs, dim=0)  # (test_batch_size * num_runs, seq_len)
-        # expanded_attention_mask = gen_input["attention_mask"].repeat_interleave(args.num_runs, dim=0)  # (test_batch_size * num_runs, seq_len)
 
         all_outputs = []
         for model_idx, model in enumerate(model_list):
@@ -128,7 +116,7 @@ def logits_func(weights, args, df, device, val_dataloader, tokenizer, model, ori
                 return_dict_in_generate=True, **gen_params)
             all_outputs.append(gens_out)
                         
-        # 融合logits并生成文本
+        # Merge logits
         merged_scores = []
         for step in range(len(all_outputs[0].scores)):
             step_scores = []
@@ -142,12 +130,12 @@ def logits_func(weights, args, df, device, val_dataloader, tokenizer, model, ori
             merged_logit = torch.log(merged_prob + 1e-10)
             merged_scores.append(merged_logit)
 
-        # 使用merged_scores生成文本
+        # Use merged_scores to generate text
         generated_tokens = [[] for i in range(len(merged_scores[0]))]
         current_tokens = gen_input["input_ids"]
         for i in range(len(merged_scores[0])):
             for step_logits in merged_scores:
-                # 获取最可能的token
+                # Acquire the most possible token
                 next_token = torch.argmax(step_logits, dim=-1)
                 g = next_token[i].item()    
                 generated_tokens[i].append(g)
@@ -279,7 +267,6 @@ def params_func(weights, args, df, device, val_dataloader, tokenizer, model, ori
         pattern = os.path.join(args.lora_path, f"lora_{args.objectives[i]}*.npz")
         matching_files = glob.glob(pattern)
         lora_params = load_lora(matching_files[0])
-        # lora_params = load_lora(args.lora_path+"lora_"+args.objectives[i]+".npz")
         for key in lora_params.keys():
             start_idx = len('base_model.model.')
             k = key[start_idx:] + '.weight'
@@ -344,7 +331,7 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
         wandb.init(project="DMORL-1", mode="disabled")
     
     def generate_grid_points(bounds):
-        """在给定bounds内生成3x3x3网格点"""
+        """Generate 3x3x3 grid points in given bounds."""
         x_points = np.linspace(bounds[0][0], bounds[0][1], 3)
         y_points = np.linspace(bounds[1][0], bounds[1][1], 3)
         z_points = np.linspace(bounds[2][0], bounds[2][1], 3)
@@ -356,25 +343,25 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
         return np.array(grid_points)
     
     def evaluate_points(points, df):
-        """评估所有点的性能并返回结果"""
-        results = {}  # 使用字典存储结果
+        """Evaluate the metrics of all points and return."""
+        results = {}  # Use dict to store results
         for point in points:
-            point_tuple = tuple(point)  # 转换为元组作为字典键
+            point_tuple = tuple(point)  # Transfer tuple to dict keys
             print(point)
             score, df = objective_func(point, args, df, **components)
             results[point_tuple] = score
         return results, df
     
     def find_best_region(results, grid_points):
-        """找到8点之和最大的区域"""
+        """Find the region with the highest sum of eight neighbor points."""
         best_sum = float('-inf')
         best_region = None
         
-        # 27个点中，找到所有可能的8点组合（2x2x2立方体）
+        # Among 27 points, find all possible 8-point combinations (2x2x2 cube)
         for i in range(2):
             for j in range(2):
                 for k in range(2):
-                    # 获取一个2x2x2立方体的8个顶点
+                    # Get the 8 vertices of a 2x2x2 cube
                     region_points = []
                     for di in range(2):
                         for dj in range(2):
@@ -383,7 +370,7 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
                                 if idx < len(grid_points):
                                     region_points.append(tuple(grid_points[idx]))
                     
-                    # 如果找到完整的8个点，计算区域得分
+                    # If 8 complete points are found, calculate the region score
                     if len(region_points) == 8:
                         region_sum = sum(results[p] for p in region_points)
                         if region_sum > best_sum:
@@ -393,7 +380,7 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
         return best_region
     
     def get_new_bounds(region_points):
-        """根据最佳区域的8个点确定新的搜索范围"""
+        """Determine new search range based on the 8 points of the best region."""
         points = np.array([list(p) for p in region_points])
         bounds = []
         for dim in range(3):
@@ -402,7 +389,7 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
             bounds.append((dim_min, dim_max))
         return bounds
 
-    # 初始搜索范围
+    # Initial search range
     current_bounds = [(0, 1) for _ in range(num_components)]
     best_point = None
     best_score = float('-inf')
@@ -412,13 +399,13 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
     for iter_num in range(iterations):
         print(f"\nIteration {iter_num + 1}:")
         
-        # 在当前范围内生成网格点
+        # Generate grid points within current range
         grid_points = generate_grid_points(current_bounds)
         
-        # 评估所有点
+        # Evaluate all points
         results, df = evaluate_points(grid_points, df)
         
-        # 找到得分最高的点
+        # Find the point with highest score
         best_point_iter = max(results.items(), key=lambda x: x[1])
         if best_point_iter[1] > best_score:
             best_score = best_point_iter[1]
@@ -427,10 +414,10 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
         print(f"Current best score: {best_score}")
         print(f"Current best point: {best_point}")
         
-        # 找到8点之和最大的区域
+        # Find the region with the largest sum of 8 points
         best_region = find_best_region(results, grid_points)
         
-        # 更新搜索范围
+        # Update search range
         current_bounds = get_new_bounds(best_region)
         print(f"New bounds: {current_bounds}")
     
@@ -439,7 +426,7 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
     wandb.finish()
 
     txt_path = os.path.join(args.lora_path, "output3.txt")  # 组合文件夹路径和文件名
-    # 写入文件
+    # Write to file
     with open(txt_path, 'w') as f:
         f.write(f"Best score: {best_score}\n")
         f.write(f"Best weights: {best_point}\n")
@@ -460,11 +447,10 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--num_seeds', type=int, default=3)
     parser.add_argument('--aggregation_mode', type=str, default="states", help="states/params/logits")
     parser.add_argument('--model_path', type=str, default="google-t5/t5-base")
     parser.add_argument('--data_path', type=str, default="data/PAIR/pair_data.csv")
-    parser.add_argument('--lora_path', type=str, default="aggregation_results/lora_combi_5/")
+    parser.add_argument('--lora_path', type=str, default="agg_results/")
     parser.add_argument('--objectives', nargs='+', default=["reflection", "empathy", "fluency"])
     parser.add_argument('--val_batch_size', type=int, default=16)
     parser.add_argument('--num_runs', type=int, default=1)
