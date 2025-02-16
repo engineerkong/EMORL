@@ -223,7 +223,7 @@ def test(args, device, test_dataloader, tokenizer, model, test_scorer, gen_param
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_path', type=str, default="models/t5-base")
+    parser.add_argument('--model_path', type=str, default="google-t5/t5-base")
     parser.add_argument('--test_datasets', type=str, default="P8K")
     parser.add_argument('--data_path', type=str, default="data/P8K/Psycho8k.json")
     parser.add_argument('--model_params', type=str, default="")

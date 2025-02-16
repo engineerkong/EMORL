@@ -462,7 +462,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--num_seeds', type=int, default=3)
     parser.add_argument('--aggregation_mode', type=str, default="states", help="states/params/logits")
-    parser.add_argument('--model_path', type=str, default="models/t5-base")
+    parser.add_argument('--model_path', type=str, default="google-t5/t5-base")
     parser.add_argument('--data_path', type=str, default="data/PAIR/pair_data.csv")
     parser.add_argument('--lora_path', type=str, default="aggregation_results/lora_combi_5/")
     parser.add_argument('--objectives', nargs='+', default=["reflection", "empathy", "fluency"])

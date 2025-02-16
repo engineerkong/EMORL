@@ -284,7 +284,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--num_seeds', type=int, default=3)
     parser.add_argument('--training_mode', type=str, default="distributed", help="options: distributed/centralized/fixed")
-    parser.add_argument('--model_path', type=str, default="models/t5-base")
+    parser.add_argument('--model_path', type=str, default="google-t5/t5-base")
     parser.add_argument('--data_path', type=str, default="data/PAIR/pair_data.csv")
     parser.add_argument('--output_path', type=str, default="lora_results/")
     parser.add_argument('--objectives', nargs='+', default=["reflection", "empathy", "fluency"])

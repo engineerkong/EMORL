@@ -15,7 +15,7 @@ class ReflectionScoreDeployedCL:
     """
     def __init__(self, same_length=False, score_change=False, model_file="./weights/reflection_scorer_weight.pt"):
         self.same_length = same_length
-        model_path = "models/roberta-base"
+        model_path = "FacebookAI/roberta-base"
         self.encoder = AutoModel.from_pretrained(model_path, add_pooling_layer=False)
         self.tokenizer = AutoTokenizer.from_pretrained(model_path)
         self.model = CrossScorerCrossEncoder(self.encoder)
