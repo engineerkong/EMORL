@@ -36,11 +36,11 @@ def config_aggregation(args):
     )
     model.to(device)
     model.eval()
-    original_params = model.state_dict() if args.aggregation_mode == "states" else None
+    original_params = model.state_dict()
 
     # Gather models individual objectives
     model_list = []
-    if args.aggregation_mode == "states":
+    if args.aggregation_mode == "states" or args.aggregation_mode == "logits":
         for i in range(len(args.objectives)):
             new_model = copy.deepcopy(model)
             new_model.to(device)
@@ -98,8 +98,91 @@ def config_aggregation(args):
         'gen_params': gen_params
     }
 
+# TODO logits_func()
+def logits_func(weights, args, df, device, val_dataloader, tokenizer, model, original_params, model_list, val_scorer, gen_params):
 
-def states_func(weights, args, device, val_dataloader, tokenizer, model, original_params, model_list, val_scorer, gen_params):
+    current_scores = { k["name"]+"_scores":[] for k in val_scorer.scorers }
+    for batch in val_dataloader:
+
+        # # Generate outputs with given prompts
+        # responses = batch["responses"]
+        # prompts = batch["prompts"]
+        # # Encode prompts for input
+        # gen_input = tokenizer.batch_encode_plus(prompts, max_length=128, return_tensors="pt", padding="longest", truncation=True)
+        # gen_input = {k: v.to(device) for k, v in gen_input.items()}
+
+        # # Expand input ids and attention masks according to num_runs
+        # expanded_input_ids = gen_input["input_ids"].repeat_interleave(args.num_runs, dim=0)  # (test_batch_size * num_runs, seq_len)
+        # expanded_attention_mask = gen_input["attention_mask"].repeat_interleave(args.num_runs, dim=0)  # (test_batch_size * num_runs, seq_len)
+
+        all_outputs = []
+        for model_idx, model in enumerate(model_list):
+            # Generate outputs with given prompts
+            responses = batch["responses"]
+            prompts = batch["prompts"]
+            gen_input = tokenizer.batch_encode_plus(prompts, max_length=128, \
+                return_tensors="pt", padding="longest", truncation=True)
+            gen_input = {k: v.to(device) for k, v in gen_input.items()}
+            gens_out = model.generate(input_ids=gen_input["input_ids"], \
+                attention_mask=gen_input["attention_mask"], output_scores=True, \
+                return_dict_in_generate=True, **gen_params)
+            all_outputs.append(gens_out)
+                        
+        # 融合logits并生成文本
+        merged_scores = []
+        for step in range(len(all_outputs[0].scores)):
+            step_scores = []
+            for model_idx, outputs in enumerate(all_outputs):
+                logits = outputs.scores[step]
+                probs = F.softmax(logits, dim=-1)
+                weighted_probs = probs * weights[model_idx]
+                step_scores.append(weighted_probs)
+                
+            merged_prob = sum(step_scores)
+            merged_logit = torch.log(merged_prob + 1e-10)
+            merged_scores.append(merged_logit)
+
+        # 使用merged_scores生成文本
+        generated_tokens = [[] for i in range(len(merged_scores[0]))]
+        current_tokens = gen_input["input_ids"]
+        for i in range(len(merged_scores[0])):
+            for step_logits in merged_scores:
+                # 获取最可能的token
+                next_token = torch.argmax(step_logits, dim=-1)
+                g = next_token[i].item()    
+                generated_tokens[i].append(g)
+
+        generateds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+        generateds = [ g.split("[CLS]") for g in generateds]
+        new_generateds = []
+        for g_list in generateds:
+            if len(g_list) <= 1:
+                new_generateds.append([g_list[0].strip()])
+            else:
+                new_generateds.append([x.strip() for x in g_list[:-1]])
+        generateds = new_generateds
+        cls_generateds = [ [ x.strip() + " [CLS]" for x in g] for g in generateds ]
+        cls_generateds = [ " ".join(g) for g in cls_generateds]
+        generateds = [ " ".join(g) for g in generateds]
+        generateds = [ g.replace("<pad>", "").strip() for g in generateds]
+        generateds = [g.replace("[CLS]", "").strip() for g in generateds]
+        prompts = [p for p in prompts for _ in range(args.num_runs)]
+        responses = [r for r in responses for _ in range(args.num_runs)]
+
+        scorer_returns = val_scorer.rl_score(inputs=prompts, generateds=generateds, responses=responses)
+        for k,v in scorer_returns.items():
+            if k in current_scores:
+                current_scores[k].extend(v)
+
+    # Calculate mean reward for this weight combination    
+    rewards = [ np.mean(v) for k,v in current_scores.items() ]
+    print(f"Rewards: {rewards}")
+    mean_reward = np.mean(rewards[:3])
+    d = np.append(weights, mean_reward)
+    df.append(d.tolist())
+    return mean_reward, df
+
+def states_func(weights, args, df, device, val_dataloader, tokenizer, model, original_params, model_list, val_scorer, gen_params):
 
     current_scores = { k["name"]+"_scores":[] for k in val_scorer.scorers }
     for batch in val_dataloader:
@@ -183,9 +266,11 @@ def states_func(weights, args, device, val_dataloader, tokenizer, model, origina
     rewards = [ np.mean(v) for k,v in current_scores.items() ]
     print(f"Rewards: {rewards}")
     mean_reward = np.mean(rewards[:3])
-    return mean_reward
+    d = np.append(weights, mean_reward)
+    df.append(d.tolist())
+    return mean_reward, df
 
-def params_func(weights, args, device, val_dataloader, tokenizer, model, original_params, model_list, val_scorer, gen_params):
+def params_func(weights, args, df, device, val_dataloader, tokenizer, model, original_params, model_list, val_scorer, gen_params):
     # Load lora params for all objectives
     updated_params = copy.deepcopy(original_params)
     new_model = copy.deepcopy(model)
@@ -246,7 +331,9 @@ def params_func(weights, args, device, val_dataloader, tokenizer, model, origina
     rewards = [ np.mean(v) for k,v in current_scores.items() ]
     print(f"Rewards: {rewards}")
     mean_reward = np.mean(rewards[:3])
-    return mean_reward
+    d = np.append(weights, mean_reward)
+    df.append(d.tolist())
+    return mean_reward, df
 
 def hierarchical_search(objective_func, args, num_components=3, iterations=5, **components):
     # Initialize wandb
@@ -268,15 +355,15 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
                     grid_points.append([x, y, z])
         return np.array(grid_points)
     
-    def evaluate_points(points):
+    def evaluate_points(points, df):
         """评估所有点的性能并返回结果"""
         results = {}  # 使用字典存储结果
         for point in points:
             point_tuple = tuple(point)  # 转换为元组作为字典键
             print(point)
-            score = objective_func(point, args, **components)
+            score, df = objective_func(point, args, df, **components)
             results[point_tuple] = score
-        return results
+        return results, df
     
     def find_best_region(results, grid_points):
         """找到8点之和最大的区域"""
@@ -320,6 +407,7 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
     best_point = None
     best_score = float('-inf')
     
+    df = []
     T_aggregation_start = time.time()
     for iter_num in range(iterations):
         print(f"\nIteration {iter_num + 1}:")
@@ -328,7 +416,7 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
         grid_points = generate_grid_points(current_bounds)
         
         # 评估所有点
-        results = evaluate_points(grid_points)
+        results, df = evaluate_points(grid_points, df)
         
         # 找到得分最高的点
         best_point_iter = max(results.items(), key=lambda x: x[1])
@@ -350,11 +438,15 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
     print(f"Entire aggregation time: {aggregation_time}")
     wandb.finish()
 
-    file_path = os.path.join(args.lora_path, "output.txt")  # 组合文件夹路径和文件名
+    txt_path = os.path.join(args.lora_path, "output3.txt")  # 组合文件夹路径和文件名
     # 写入文件
-    with open(file_path, 'w') as f:
+    with open(txt_path, 'w') as f:
         f.write(f"Best score: {best_score}\n")
         f.write(f"Best weights: {best_point}\n")
+
+    json_path = os.path.join(args.lora_path, "output3.json")  # 组合文件夹路径和文件名
+    with open(json_path, 'w') as f:
+        json.dump(df, f)
     return best_point, best_score
 
 # def verify_lora(args, seed=5326, device="cuda", val_dataloader=None, tokenizer=None, model=None, \
@@ -382,7 +474,7 @@ def main():
     # save_args(args, "DL_AGGREGATION", "logs/")
 
     components = config_aggregation(args)
-    best_point, best_score = hierarchical_search(objective_func=states_func, args=args, **components)
+    best_point, best_score = hierarchical_search(objective_func=logits_func, args=args, **components)
 if __name__ == "__main__":
     main()
             
