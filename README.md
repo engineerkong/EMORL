@@ -3,7 +3,7 @@
 ## Original Paper
 DMORL: Distributed Multi-Objective Reinforcement Learning Framework for Fine-Tuning Large Language Models in Counsellor Reflection Generation
 
-## Documentation Structure
+## Code Overview
 - `/dl_training.py`: distributed training for individual objectives (ours), uniform weighted and dynaopt training (baselines)
 - `/dl_aggregation.py`: states-level aggregation (ours), parameters and logits-level aggregation (comparison) using hierarchical grid search
 - `/dl_test.py`: general evaluation experiments for all models (for DMORL needs weights combination as input)
