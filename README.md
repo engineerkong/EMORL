@@ -23,7 +23,7 @@ pip install -r requirements.txt
 ```
 
 ## Datasets and Weights Download
-Download [PAIR dataset](https://lit.eecs.umich.edu/downloads.html) and [Psch8k dataset](https://huggingface.co/datasets/EmoCareAI/Psych8) into `DMORL/data`.
+Download [PAIR dataset](https://lit.eecs.umich.edu/downloads.html) and [Psch8k dataset](https://huggingface.co/datasets/EmoCareAI/Psych8k) into `DMORL/data`.
 
 Download [reflection scoring weights](https://drive.google.com/file/d/1RPvMVLe7WS_spOvQI8FmPz6khI-MWWtA/view?usp=drive_link) into `DMORL/weights`.
 
