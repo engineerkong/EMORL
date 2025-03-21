@@ -226,11 +226,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path', type=str, default="google-t5/t5-base")
     parser.add_argument('--test_datasets', type=str, default="P8K")
-    parser.add_argument('--data_path', type=str, default="data/P8K/Psycho8k.json")
+    parser.add_argument('--data_path', type=str, default="data/P8K/Psych8k.json")
     parser.add_argument('--model_params', type=str, default="")
     parser.add_argument('--weight_combination', nargs='+', default=[0.78125, 0.5, 0.0625])
     parser.add_argument('--objectives', nargs='+', default=["reflection", "empathy", "fluency"])
-    parser.add_argument('--output_path', type=str, default="output_psycho8k.xlsx")
+    parser.add_argument('--output_path', type=str, default="output_psych8k.xlsx")
     parser.add_argument('--test_batch_size', type=int, default=16)
     parser.add_argument('--num_runs', type=int, default=1)
     
