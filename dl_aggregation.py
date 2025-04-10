@@ -9,6 +9,8 @@ import argparse
 import time
 import os
 import glob
+from skopt import gp_minimize
+from skopt.space import Real
 
 from model_empathy import *
 from dynaopt_lib import *
@@ -17,7 +19,6 @@ from utils_additional import *
 
 import numpy as np
 import torch
-from transformers import T5Tokenizer, T5ForConditionalGeneration
 
 def config_aggregation(args):
     # Load device
@@ -325,7 +326,7 @@ def params_func(weights, args, df, device, val_dataloader, tokenizer, model, ori
 def hierarchical_search(objective_func, args, num_components=3, iterations=5, **components):
     # Initialize wandb
     if args.do_wandb:
-        wandb.init(project="DMORL-1", group="AGGREGATION", name=f"aggregation_{args.aggregation_mode}_{seed}")
+        wandb.init(project="DMORL-1", group="AGGREGATION", name=f"aggregation_{args.aggregation_mode}")
         wandb.define_metric("mean_reward", step_metric="data_consuming")
     else:
         wandb.init(project="DMORL-1", mode="disabled")
@@ -436,6 +437,82 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
         json.dump(df, f)
     return best_point, best_score
 
+def bayesian_search(objective_func, args, num_components=3, iterations=10, **components):
+    # Initialize wandb
+    if args.do_wandb:
+        wandb.init(project="DMORL-2", group="AGGREGATION", name=f"aggregation_{args.aggregation_mode}")
+        wandb.define_metric("mean_reward", step_metric="data_consuming")
+    else:
+        wandb.init(project="DMORL-2", mode="disabled")
+    
+    # Create the search space
+    space = [Real(0.0, 1.0, name=f'weight_{i}') for i in range(num_components)]
+    
+    # Keep track of all evaluations
+    df = []
+    best_point = None
+    best_score = float('-inf')
+    
+    # Wrapper for the objective function
+    def objective_wrapper(weights):
+        nonlocal df, best_point, best_score
+        
+        # Convert weights to numpy array
+        weights = np.array(weights)
+        
+        # Get score from the objective function
+        score, updated_df = objective_func(weights, args, df, **components)
+        df = updated_df
+        
+        # Update best point and score if needed
+        if score > best_score:
+            best_score = score
+            best_point = weights.tolist()
+            print(f"New best score: {best_score}")
+            print(f"New best point: {best_point}")
+        
+        # Return negative score for minimization
+        return -score
+    
+    # Start timing
+    T_aggregation_start = time.time()
+    
+    # Run Bayesian optimization
+    result = gp_minimize(
+        objective_wrapper,   # the function to minimize
+        space,               # the search space
+        n_calls=iterations,  # the number of evaluations
+        n_initial_points=min(5, iterations//2),  # the number of random points to start with
+        random_state=42,     # for reproducibility
+        verbose=True,        # print progress
+        n_jobs=-1            # use all available cores
+    )
+    
+    # Get the best point and score
+    best_weights = result.x
+    best_score = -result.fun
+    
+    # Record time
+    aggregation_time = time.time() - T_aggregation_start
+    print(f"Entire aggregation time: {aggregation_time}")
+    
+    # Finish wandb
+    wandb.finish()
+    
+    # Save results
+    txt_path = os.path.join(args.lora_path, "output_bayesian.txt")
+    with open(txt_path, 'w') as f:
+        f.write(f"Best score: {best_score}\n")
+        f.write(f"Best weights: {best_weights}\n")
+    
+    json_path = os.path.join(args.lora_path, "output_bayesian.json")
+    with open(json_path, 'w') as f:
+        json.dump(df, f)
+    
+    return best_weights, best_score
+    
+
+
 # def verify_lora(args, seed=5326, device="cuda", val_dataloader=None, tokenizer=None, model=None, \
 #                         original_params=None, model_list=[], val_scorer=None, gen_params=None, aggregation_func=states_func):
 #     wandb.init(project="DMORL", mode="disabled")
@@ -450,7 +527,7 @@ def main():
     parser.add_argument('--aggregation_mode', type=str, default="states", help="states/params/logits")
     parser.add_argument('--model_path', type=str, default="google-t5/t5-base")
     parser.add_argument('--data_path', type=str, default="data/PAIR/pair_data.csv")
-    parser.add_argument('--lora_path', type=str, default="agg_results/")
+    parser.add_argument('--lora_path', type=str, default="lora_results/")
     parser.add_argument('--objectives', nargs='+', default=["reflection", "empathy", "fluency"])
     parser.add_argument('--val_batch_size', type=int, default=16)
     parser.add_argument('--num_runs', type=int, default=1)
