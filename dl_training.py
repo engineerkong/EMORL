@@ -11,6 +11,7 @@ from model_empathy import *
 from dynaopt_lib import *
 from utils_lora import *
 from utils_additional import *
+from huggingface_hub import login
 
 def config_training(args, objective, seed):
     # Load device
@@ -74,13 +75,14 @@ def config_training(args, objective, seed):
     val_scorers = [get_scorer(obj) for obj in val_objectives]
     val_scorer = ScorerWrapper(val_scorers, learning_mode, scoring_method="fixed_logsum" if args.training_mode=="fixed" else "logsum", max_batch_size=12)
 
-    # Define generation parameters
+    # Define generation parameters for DialoGPT
     gen_params = {
         "max_new_tokens": 64,
         "early_stopping": True,
         "do_sample": True,
         "num_return_sequences": args.num_runs,
-        "temperature": 1.0
+        "temperature": 1.0,
+        "pad_token_id": tokenizer.eos_token_id  # DialoGPT uses eos_token as pad_token
     }
     
     return {
@@ -139,27 +141,21 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
             # Generate outputs with given prompts
             prompts = batch["prompts"]
             responses = batch["responses"]
-            gen_input = tokenizer.batch_encode_plus(prompts, max_length=128, \
-                return_tensors="pt", padding="longest", truncation=True)
+            # DialoGPT uses a different tokenization approach
+            gen_input = tokenizer(prompts, max_length=128, \
+                return_tensors="pt", padding=True, truncation=True)
             gen_input = {k: v.to(device) for k, v in gen_input.items()}
             gens_out = model.generate(input_ids=gen_input["input_ids"],\
                 attention_mask=gen_input["attention_mask"], **gen_params)
+            # Process outputs for DialoGPT
             generateds = tokenizer.batch_decode(gens_out, skip_special_tokens=True)
-            generateds = [ g.split("[CLS]") for g in generateds]
-            new_generateds = []
-            for g_list in generateds:
-                if len(g_list) <= 1:
-                    new_generateds.append([g_list[0].strip()])
-                else:
-                    new_generateds.append([x.strip() for x in g_list[:-1]])
-            generateds = new_generateds
-            cls_generateds = [ [ x.strip() + " [CLS]" for x in g] for g in generateds ]
-            cls_generateds = [ " ".join(g) for g in cls_generateds]
-            generateds = [ " ".join(g) for g in generateds]
-            generateds = [ g.replace("<pad>", "").strip() for g in generateds]
-            generateds = [g.replace("[CLS]", "").strip() for g in generateds]
-            gens_out = tokenizer.batch_encode_plus(cls_generateds, max_length=128, \
-                return_tensors="pt", padding="longest", truncation=True)["input_ids"]  
+            # Clean up the generated text
+            generateds = [g.replace("<pad>", "").strip() for g in generateds]
+            
+            # For DialoGPT, we don't need to handle [CLS] tokens the same way as T5
+            # Re-encode for the loss calculation
+            gens_out = tokenizer(generateds, max_length=128, \
+                return_tensors="pt", padding="longest", truncation=True)["input_ids"]
             prompts = [p for p in prompts for _ in range(args.num_runs)]
             responses = [r for r in responses for _ in range(args.num_runs)]
 
@@ -195,25 +191,15 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
                 for batch in val_dataloader:
                     responses = batch["responses"]
                     prompts = batch["prompts"]
-                    gen_input = tokenizer.batch_encode_plus(prompts, max_length=128, \
+                    gen_input = tokenizer(prompts, max_length=128, \
                         return_tensors="pt", padding="longest", truncation=True)
                     gen_input = {k: v.to(device) for k, v in gen_input.items()}
                     gens_out = model.generate(input_ids=gen_input["input_ids"],\
                         attention_mask=gen_input["attention_mask"], **gen_params)
+                    # Process validation outputs for DialoGPT
                     generateds = tokenizer.batch_decode(gens_out, skip_special_tokens=True)
-                    generateds = [ g.split("[CLS]") for g in generateds]
-                    new_generateds = []
-                    for g_list in generateds:
-                        if len(g_list) <= 1:
-                            new_generateds.append([g_list[0].strip()])
-                        else:
-                            new_generateds.append([x.strip() for x in g_list[:-1]])
-                    generateds = new_generateds
-                    cls_generateds = [ [ x.strip() + " [CLS]" for x in g] for g in generateds ]
-                    cls_generateds = [ " ".join(g) for g in cls_generateds]
-                    generateds = [ " ".join(g) for g in generateds]
-                    generateds = [ g.replace("<pad>", "").strip() for g in generateds]
-                    generateds = [g.replace("[CLS]", "").strip() for g in generateds]
+                    # Clean up the generated text
+                    generateds = [g.replace("<pad>", "").strip() for g in generateds]
                     prompts = [p for p in prompts for _ in range(args.num_runs)]
                     responses = [r for r in responses for _ in range(args.num_runs)]
                     scorer_returns = val_scorer.rl_score(prompts, generateds, responses=responses, step_count=step_count, \
@@ -284,7 +270,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--num_seeds', type=int, default=3)
     parser.add_argument('--training_mode', type=str, default="distributed", help="options: distributed/centralized/fixed")
-    parser.add_argument('--model_path', type=str, default="google-t5/t5-base")
+    parser.add_argument('--model_path', type=str, default="microsoft/DialoGPT-medium")
     parser.add_argument('--data_path', type=str, default="data/PAIR/pair_data.csv")
     parser.add_argument('--output_path', type=str, default="lora_results/")
     parser.add_argument('--objectives', nargs='+', default=["reflection", "empathy", "fluency"])

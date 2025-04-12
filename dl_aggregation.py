@@ -437,7 +437,7 @@ def hierarchical_search(objective_func, args, num_components=3, iterations=5, **
         json.dump(df, f)
     return best_point, best_score
 
-def bayesian_search(objective_func, args, num_components=3, iterations=10, **components):
+def bayesian_search(objective_func, args, num_components=3, iterations=1000, **components):
     # Initialize wandb
     if args.do_wandb:
         wandb.init(project="DMORL-2", group="AGGREGATION", name=f"aggregation_{args.aggregation_mode}")
@@ -527,7 +527,7 @@ def main():
     parser.add_argument('--aggregation_mode', type=str, default="states", help="states/params/logits")
     parser.add_argument('--model_path', type=str, default="google-t5/t5-base")
     parser.add_argument('--data_path', type=str, default="data/PAIR/pair_data.csv")
-    parser.add_argument('--lora_path', type=str, default="lora_results/")
+    parser.add_argument('--lora_path', type=str, default="lora_results/20250409_2050/")
     parser.add_argument('--objectives', nargs='+', default=["reflection", "empathy", "fluency"])
     parser.add_argument('--val_batch_size', type=int, default=16)
     parser.add_argument('--num_runs', type=int, default=1)
@@ -537,7 +537,7 @@ def main():
     # save_args(args, "DL_AGGREGATION", "logs/")
 
     components = config_aggregation(args)
-    best_point, best_score = hierarchical_search(objective_func=logits_func, args=args, **components)
+    best_point, best_score = bayesian_search(objective_func=logits_func, args=args, **components)
 if __name__ == "__main__":
     main()
             

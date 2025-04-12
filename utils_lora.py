@@ -13,9 +13,21 @@ def find_all_linear_names(model):
     for name, module in model.named_modules():
         if isinstance(module, nn.Linear):
             names = name.split('.')
-            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+            # For DialoGPT, we need to target specific modules
+            if 'microsoft/DialoGPT' in model.config._name_or_path:
+                # DialoGPT uses GPT-2 architecture
+                if any(key in name for key in ['attn.c_attn', 'attn.c_proj', 'mlp.c_fc', 'mlp.c_proj']):
+                    lora_module_names.add(name)
+            else:
+                lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+    
     if 'lm_head' in lora_module_names:
         lora_module_names.remove('lm_head')
+    
+    # If no modules were found, use default GPT-2 target modules
+    if len(lora_module_names) == 0 and 'microsoft/DialoGPT' in model.config._name_or_path:
+        lora_module_names = ['c_attn', 'c_proj', 'c_fc']
+    
     return list(lora_module_names)
 
 def setup_lora_config(model):
@@ -30,7 +42,7 @@ def setup_lora_config(model):
         target_modules=target_modules,
         lora_dropout=0.05,
         bias="none",
-        task_type="SEQ_2_SEQ_LM"
+        task_type="CAUSAL_LM"  # Changed from SEQ_2_SEQ_LM to CAUSAL_LM for DialoGPT
     )
     model = get_peft_model(model, config)
     return model

@@ -40,23 +40,106 @@ class ReinforceCriterion:
         if not train_model:
             return 0.0
         assert len(prompt_inputs)==len(decoded_tokens), "There's a shape mismatch between inputs and outputs %d != %d" % (len(prompt_inputs), len(decoded_tokens))
-        encoded_prompt= self.tokenizer(prompt_inputs, return_tensors="pt", padding="longest", truncation=True, max_length=512)
+        
+        # Check if we're using DialoGPT (decoder-only) or T5 (encoder-decoder)
+        is_dialogpt = hasattr(self.model, 'config') and hasattr(self.model.config, '_name_or_path') and 'DialoGPT' in self.model.config._name_or_path
+        
+        encoded_prompt = self.tokenizer(prompt_inputs, return_tensors="pt", padding="longest", truncation=True, max_length=512)
         encoded_prompt = {k: v.to(self.model.device) for k, v in encoded_prompt.items()}
         decoded_tokens_tensor = decoded_tokens.to(self.model.device)
-        output = self.model(input_ids=encoded_prompt['input_ids'], \
-                attention_mask=encoded_prompt['attention_mask'], labels = decoded_tokens_tensor)
-        logits = output.logits
-        decoded_tokens = decoded_tokens_tensor.tolist()
-        selected_logprobs = select_logprobs(logits, decoded_tokens, self.eos_id)
+        
+        if is_dialogpt:
+            # For DialoGPT, we need to handle the loss calculation differently
+            # We'll use the model's forward pass without labels and calculate the loss manually
+            output = self.model(input_ids=encoded_prompt['input_ids'],
+                                attention_mask=encoded_prompt['attention_mask'])
+            logits = output.logits
+            
+            # Get the logits for the generated tokens
+            decoded_tokens_list = decoded_tokens_tensor.tolist()
+            selected_logprobs = []
+            
+            for i, tokens in enumerate(decoded_tokens_list):
+                # Filter out padding tokens
+                tokens = [t for t in tokens if t != self.tokenizer.pad_token_id]
+                if tokens:
+                    try:
+                        # Get logits for this sequence, ensuring we don't go out of bounds
+                        seq_length = min(len(tokens), logits.size(1))
+                        tokens = tokens[:seq_length]  # Truncate tokens if needed
+                        
+                        # Get logits for valid tokens
+                        seq_logits = logits[i, :seq_length, :]
+                        
+                        # Get log probabilities
+                        log_probs = torch.nn.functional.log_softmax(seq_logits, dim=-1)
+                        
+                        # Create a valid range for indexing
+                        valid_range = torch.arange(seq_length, device=self.model.device)
+                        
+                        # Ensure tokens are within vocabulary size
+                        vocab_size = log_probs.size(-1)
+                        valid_tokens = [min(t, vocab_size-1) for t in tokens]
+                        valid_tokens = torch.tensor(valid_tokens, device=self.model.device)
+                        
+                        # Select log probs for the actual tokens
+                        token_log_probs = log_probs[valid_range, valid_tokens]
+                        
+                        # Sum log probs
+                        seq_log_prob = token_log_probs.sum()
+                        selected_logprobs.append(seq_log_prob)
+                    except Exception as e:
+                        print(f"Error processing sequence {i}: {e}")
+                        # Fallback to a zero log prob
+                        selected_logprobs.append(torch.tensor(0.0, device=self.model.device))
+                else:
+                    # If all tokens were padding, use a zero log prob
+                    selected_logprobs.append(torch.tensor(0.0, device=self.model.device))
+            
+            selected_logprobs = torch.stack(selected_logprobs)
+        else:
+            # Original T5 approach
+            output = self.model(input_ids=encoded_prompt['input_ids'], 
+                    attention_mask=encoded_prompt['attention_mask'], labels=decoded_tokens_tensor)
+            logits = output.logits
+            decoded_tokens = decoded_tokens_tensor.tolist()
+            selected_logprobs = select_logprobs(logits, decoded_tokens, self.eos_id)
         if self.ref_model is not None:
             with torch.no_grad():
-                ref_logits = self.ref_model(input_ids=encoded_prompt['input_ids'], \
-                    attention_mask=encoded_prompt['attention_mask'], labels = decoded_tokens_tensor).logits
-                ref_selected_logprobs = select_logprobs(ref_logits, decoded_tokens, self.eos_id)
-                kl = self.kl_loss(F.log_softmax(ref_logits, dim=-1), F.softmax(logits, dim=-1))
-                kl = torch.sum(kl, dim=-1)
-                kl_mask = decoded_tokens_tensor != self.tokenizer.pad_token_id
-                kl = reduce_mean(kl, kl_mask)
+                # Check if we're using DialoGPT
+                if is_dialogpt:
+                    # For DialoGPT, we need to handle the KL calculation differently
+                    ref_output = self.ref_model(input_ids=encoded_prompt['input_ids'],
+                                            attention_mask=encoded_prompt['attention_mask'])
+                    ref_logits = ref_output.logits
+                    
+                    # Calculate KL divergence manually for each sequence
+                    kl_values = []
+                    for i in range(logits.size(0)):
+                        # Get sequence length (excluding padding)
+                        seq_length = torch.sum(encoded_prompt['attention_mask'][i]).item()
+                        
+                        # Get logits for this sequence
+                        seq_logits = logits[i, :seq_length, :]
+                        ref_seq_logits = ref_logits[i, :seq_length, :]
+                        
+                        # Calculate KL divergence
+                        log_probs = F.log_softmax(seq_logits, dim=-1)
+                        ref_probs = F.softmax(ref_seq_logits, dim=-1)
+                        seq_kl = F.kl_div(log_probs, ref_probs, reduction='batchmean')
+                        kl_values.append(seq_kl)
+                    
+                    # Average KL divergence across sequences
+                    kl = torch.stack(kl_values).mean()
+                else:
+                    # Original T5 approach
+                    ref_logits = self.ref_model(input_ids=encoded_prompt['input_ids'], \
+                        attention_mask=encoded_prompt['attention_mask'], labels=decoded_tokens_tensor).logits
+                    ref_selected_logprobs = select_logprobs(ref_logits, decoded_tokens, self.eos_id)
+                    kl = self.kl_loss(F.log_softmax(ref_logits, dim=-1), F.softmax(logits, dim=-1))
+                    kl = torch.sum(kl, dim=-1)
+                    kl_mask = decoded_tokens_tensor != self.tokenizer.pad_token_id
+                    kl = reduce_mean(kl, kl_mask)
         if self.ref_model is not None:
             loss = torch.mean(rewards * (selected_logprobs + self.kl_coeff * kl))
             wandb.log({"KL term": torch.mean(rewards * self.kl_coeff * kl).item()})

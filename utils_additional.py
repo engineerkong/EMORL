@@ -9,7 +9,7 @@ import os
 import json
 from itertools import combinations, product
 from typing import List, Dict, Tuple
-from transformers import T5Tokenizer, T5ForConditionalGeneration
+from transformers import T5Tokenizer, T5ForConditionalGeneration, AutoTokenizer, AutoModelForCausalLM
 
 def set_seed(seed: int = 42) -> None:
     """
@@ -26,11 +26,26 @@ def set_seed(seed: int = 42) -> None:
 
 def get_model(model_path: str, max_seq_length: int = 90, lora = False, max_output_length: int = 90):
     """
-    Function for loading tokenizer and model (T5-base), as well as set the configurations
+    Function for loading tokenizer and model (T5-base or DialoGPT), as well as set the configurations
     """
     print("Load model: ", model_path)
-    tokenizer = T5Tokenizer.from_pretrained(model_path)
-    model = T5ForConditionalGeneration.from_pretrained(model_path)
+    if model_path == "google-t5/t5-base":
+        tokenizer = T5Tokenizer.from_pretrained(model_path)
+        model = T5ForConditionalGeneration.from_pretrained(model_path)
+    else:
+        # For DialoGPT or other causal language models
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model = AutoModelForCausalLM.from_pretrained(model_path)
+        
+        # DialoGPT doesn't have a pad_token set by default
+        if tokenizer.pad_token is None:
+            # Use eos_token as pad_token
+            tokenizer.pad_token = tokenizer.eos_token
+            model.config.pad_token_id = model.config.eos_token_id
+        
+        # Set padding side to left for decoder-only models like DialoGPT
+        tokenizer.padding_side = "left"
+    
     model.config.max_length = max_seq_length
     tokenizer.model_max_length = max_seq_length
     model.config.max_output_length = max_output_length
