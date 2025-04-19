@@ -104,6 +104,7 @@ class ReinforceCriterion:
             logits = output.logits
             decoded_tokens = decoded_tokens_tensor.tolist()
             selected_logprobs = select_logprobs(logits, decoded_tokens, self.eos_id)
+        # TODO: check if KL loss is negative
         if self.ref_model is not None:
             with torch.no_grad():
                 # Check if we're using DialoGPT
@@ -141,6 +142,7 @@ class ReinforceCriterion:
                     kl_mask = decoded_tokens_tensor != self.tokenizer.pad_token_id
                     kl = reduce_mean(kl, kl_mask)
         if self.ref_model is not None:
+            print("KL loss: ", kl.mean().item())
             loss = torch.mean(rewards * (selected_logprobs + self.kl_coeff * kl))
             wandb.log({"KL term": torch.mean(rewards * self.kl_coeff * kl).item()})
             wandb.log({"KL": torch.mean(kl).item()})
