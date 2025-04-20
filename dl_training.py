@@ -7,11 +7,22 @@ import wandb
 import argparse
 import time
 import os
+import re
 from model_empathy import *
 from dynaopt_lib import *
 from utils_lora import *
 from utils_additional import *
 from huggingface_hub import login
+
+def clean_generated_text(text):
+    """
+    Remove anything after the [SEP] token in generated text.
+    If [SEP] is not present, return the original text.
+    """
+    if "[SEP]" in text:
+        # Split at [SEP] and keep only the part before it
+        return text.split("[SEP]")[0].strip()
+    return text
 
 def config_training(args, objective, seed):
     # Load device
@@ -105,10 +116,10 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
              rl_crit, scorer, val_scorer, gen_params, objective, seed):
     # Initialize wandb
     if args.do_wandb:
-        wandb.init(project="DMORL-1", group="TRAINING", name=f"training_{args.training_mode}_{objective}_{seed}")
+        wandb.init(project="DMORL-training", group="TRAINING", name=f"training_{args.training_mode}_{objective}_{seed}")
         wandb.define_metric("mean_reward", step_metric="data_consuming")
     else:
-        wandb.init(project="DMORL", mode="disabled")
+        wandb.init(project="DMORL-training", mode="disabled")
 
     # Initialize bandit
     if args.training_mode == "centralized":
@@ -150,7 +161,7 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
             # Process outputs for DialoGPT
             generateds = tokenizer.batch_decode(gens_out, skip_special_tokens=True)
             # Clean up the generated text
-            generateds = [g.replace("<pad>", "").strip() for g in generateds]
+            generateds = [clean_generated_text(g.replace("<pad>", "").strip()) for g in generateds]
             
             # For DialoGPT, we don't need to handle [CLS] tokens the same way as T5
             # Re-encode for the loss calculation
@@ -199,7 +210,7 @@ def train(args, device, train_dataloader, val_dataloader, tokenizer, model, opti
                     # Process validation outputs for DialoGPT
                     generateds = tokenizer.batch_decode(gens_out, skip_special_tokens=True)
                     # Clean up the generated text
-                    generateds = [g.replace("<pad>", "").strip() for g in generateds]
+                    generateds = [clean_generated_text(g.replace("<pad>", "").strip()) for g in generateds]
                     prompts = [p for p in prompts for _ in range(args.num_runs)]
                     responses = [r for r in responses for _ in range(args.num_runs)]
                     scorer_returns = val_scorer.rl_score(prompts, generateds, responses=responses, step_count=step_count, \
