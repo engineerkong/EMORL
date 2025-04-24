@@ -1,7 +1,7 @@
-# DMORL: Distributed Multi-Objective RL Fine-Tuning Framework
+# EMORL: Ensemble Multi-Objective Reinforcement Learning for Efficient and Flexible LLM Fine-Tuning
 
 ## Original Paper
-DMORL: Distributed Multi-Objective Reinforcement Learning Framework for Fine-Tuning Large Language Models in Counsellor Reflection Generation
+EMORL: Ensemble Multi-Objective Reinforcement Learning for Efficient and Flexible LLM Fine-Tuning
 
 ## Code Overview
 - `/dl_training.py`: distributed training for individual objectives (ours), uniform weighted and dynaopt training (baselines)
@@ -17,15 +17,15 @@ DMORL: Distributed Multi-Objective Reinforcement Learning Framework for Fine-Tun
 # Keep sure cuda and cuda toolkit installed
 conda create --name myenv python=3.9
 conda activate myenv
-git clone https://github.com/engineerkong/DMORL.git
-cd DMORL
+git clone https://github.com/engineerkong/EMORL.git
+cd EMORL
 pip install -r requirements.txt
 ```
 
-## Datasets and Weights Download
-Download [PAIR dataset](https://lit.eecs.umich.edu/downloads.html) and [Psch8k dataset](https://huggingface.co/datasets/EmoCareAI/Psych8k) into `DMORL/data`.
+## Datasets and Model Checkpoints Download
+Download [PAIR dataset](https://lit.eecs.umich.edu/downloads.html) and [Psch8k dataset](https://huggingface.co/datasets/EmoCareAI/Psych8k) into `EMORL/data`.
 
-Download [reflection scoring weights](https://drive.google.com/file/d/1RPvMVLe7WS_spOvQI8FmPz6khI-MWWtA/view?usp=drive_link) into `DMORL/weights`.
+Download [reflection scoring weights](https://drive.google.com/file/d/1RPvMVLe7WS_spOvQI8FmPz6khI-MWWtA/view?usp=drive_link) into `EMORL/weights`.
 
 ## Quick Start
 ```
