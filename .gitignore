@@ -2,7 +2,6 @@
 /models/*
 /data/*
 /weights/*
-/lora_results/*
 /aggregation_results/*
 /experiment_results/*
 /tmp/*

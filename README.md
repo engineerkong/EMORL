@@ -4,13 +4,14 @@
 EMORL: Ensemble Multi-Objective Reinforcement Learning for Efficient and Flexible LLM Fine-Tuning
 
 ## Code Overview
-- `/dl_training.py`: distributed training for individual objectives (ours), uniform weighted and dynaopt training (baselines)
-- `/dl_aggregation.py`: states-level aggregation (ours), parameters and logits-level aggregation (comparison) using hierarchical grid search
-- `/dl_test.py`: general evaluation experiments for all models (for DMORL needs weights combination as input)
+- `/el_training.py`: ensembled training for individual objectives (ours), uniform weighted and dynaopt training (baselines)
+- `/el_aggregation.py`: hidden states aggregation (ours), parameters and logits aggregation (comparison) using hierarchical grid search
+- `/el_test.py`: general evaluation experiments for all models (for DMORL needs weights combination as input)
 - `/utils_additional.py`: utils about load and save models, generation configs, convergence check etc.
 - `/utils_lora.py`: utils about lora implementation
 - `/model_empathy.py`: program to load and implement 'bert-empathy' scoring model
 - `/dynaopt_lib`: original utils from 'dynaopt' repository with minimum change
+- `/lora_results`: trained single-objective models
 
 ## Dependency Setup
 ```
