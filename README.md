@@ -2,7 +2,7 @@
 
 ## Original Paper
 EMORL: Ensemble Multi-Objective Reinforcement Learning for Efficient and Flexible LLM Fine-Tuning
-![Framework](misc/EMORL_framework.png)
+![Framework](misc/EMORL_Framework.png)
 ## Code Overview
 - `/el_training.py`: ensembled training for individual objectives (ours), uniform weighted and dynaopt training (baselines)
 - `/el_aggregation.py`: hidden states aggregation (ours), parameters and logits aggregation (comparison) using hierarchical grid search
