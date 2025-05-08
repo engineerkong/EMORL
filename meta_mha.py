@@ -44,11 +44,12 @@ class MetaLearner(nn.Module):
             )
             
             # 第二层: 跨步骤的信息融合 - 使用单头注意力
-            self.step_fusion = nn.MultiheadAttention(
+            self.step_fusion = MOMultiHeadAttentionLayer(
+                n_heads=1,
                 embed_dim=hidden_dim,
-                num_heads=8,  # 使用多头注意力以提高性能
-                batch_first=True
-            ).to(device)
+                feed_forward_hidden=feed_forward_hidden,
+                normalization=normalization
+            )
             
             # 位置编码
             self.position_encoding = nn.Parameter(torch.zeros(1, max_steps, hidden_dim)).to(device)
