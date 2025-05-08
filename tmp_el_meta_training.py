@@ -12,11 +12,157 @@ import copy
 import glob
 import wandb
 
-from meta_mha import MetaLearner
+from mha import MOMultiHeadAttentionLayer
 from model_empathy import *
 from dynaopt_lib import *
 from utils_lora import *
 from utils_additional import *
+
+class MetaLearner(nn.Module):
+    def __init__(self, base_model, n_heads, embed_dim, feed_forward_hidden, normalization, device):
+        super().__init__()
+        self.base_model = base_model
+        self.n_heads = n_heads
+        self.embed_dim = embed_dim
+        self.feed_forward_hidden = feed_forward_hidden
+        self.normalization = normalization
+        self.device = device
+
+        self.mha = MOMultiHeadAttentionLayer(self.n_heads, self.embed_dim, self.feed_forward_hidden, self.normalization)
+        self.lm_head = self.base_model.lm_head
+
+    def __call__(self, input_ids=None, attention_mask=None, labels=None, output_hidden_states=False, return_dict=True, **kwargs):
+        """
+        Makes MetaLearner compatible with the ReinforceCriterion by implementing 
+        the expected forward interface of the language model.
+        """
+        
+        # Process through mha and get combined output
+        hidden_states_combined = torch.zeros(
+            len(self.model_list),
+            input_ids.size(0),
+            input_ids.size(1),
+            self.model_list[0].config.d_model,
+            dtype=torch.float,
+            device=self.device,
+        )
+        
+        # Get logits from each model
+        for model_idx, model in enumerate(self.model_list):
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+                output_hidden_states=True,
+                return_dict=True,
+            )
+            # Store the last hidden state for MHA
+            hidden_states_combined[model_idx] = outputs.decoder_hidden_states[-1]
+        
+        # Process through multi-head attention
+        mha_states = self.mha(hidden_states_combined)
+        # Get logits from lm_head
+        logits = self.lm_head(mha_states)
+        
+        # Create a structure similar to what the base model would return
+        from dataclasses import dataclass
+        
+        @dataclass
+        class ModelOutput:
+            logits: torch.Tensor
+            loss: torch.Tensor = None
+        
+        return ModelOutput(logits=logits)
+
+    def config_models(self, lora_updates):
+        original_params = self.base_model.state_dict()
+        assert len(lora_updates) == self.n_heads, "lora_updates should have the same number of heads as the model"
+        self.model_list = []
+        for lora_params in lora_updates:
+            new_model = copy.deepcopy(self.base_model)
+            new_model.to(self.device)
+            updated_params = copy.deepcopy(original_params)
+            for key in lora_params.keys():
+                start_idx = len('base_model.model.')
+                k = key[start_idx:] + '.weight'
+                updated_params[k] = updated_params[k] + (lora_params[key][1] @ lora_params[key][0]) * lora_params[key][2]
+            new_model.load_state_dict(updated_params)
+            self.model_list.append(new_model)
+        
+    def forward(self, gen_input, num_runs, train_batch_size, max_output_length):
+        assert len(self.model_list) == self.n_heads, "features should have the same number of heads as the model"
+        # Expand input ids and attention masks according to num_runs
+        expanded_input_ids = gen_input["input_ids"].repeat_interleave(num_runs, dim=0)  # (train_batch_size * num_runs, seq_len)
+        expanded_attention_mask = gen_input["attention_mask"].repeat_interleave(num_runs, dim=0)  # (train_batch_size * num_runs, seq_len)
+        decoder_input_ids = torch.full(
+            (train_batch_size * num_runs, 1),
+            self.model_list[0].config.decoder_start_token_id,
+            dtype=torch.long,
+            device=self.device,
+        )  # (train_batch_size * num_runs, 1)
+        hidden_states_combined = torch.zeros(
+            len(self.model_list),  # number of models
+            decoder_input_ids.size(0),  # train_batch_size * num_runs
+            decoder_input_ids.size(1),  # current decoded ids length
+            self.model_list[0].config.d_model,  # dimension of model hidden layers
+            dtype=torch.float,
+            device=self.device,
+        )
+        generated_tokens = torch.zeros(train_batch_size*num_runs, max_output_length, dtype=torch.long, device=self.device)
+        hidden_states_list = []
+        for model_idx, model in enumerate(self.model_list):
+            generated_outputs = model.generate(
+                input_ids=expanded_input_ids,
+                attention_mask=expanded_attention_mask,
+                max_length=max_output_length,
+                output_hidden_states=True,
+                return_dict_in_generate=True,
+            )
+            model_hidden_states = torch.stack([step[-1] for step in generated_outputs.decoder_hidden_states])
+            hidden_states_list.append(model_hidden_states)
+        all_models_hidden_states = torch.stack(hidden_states_list)
+        hidden_states_combined = all_models_hidden_states.permute(1, 0, 2, 3, 4)
+        print(f"hidden_states_combined shape: {hidden_states_combined.shape}")
+
+        # mha_states = self.mha(hidden_states_combined)
+        # logits = self.lm_head(mha_states)  # shape: (num_heads, train_batch_size * num_runs, vocab_size)
+        # next_token = torch.argmax(logits[:, -1, :], dim=-1)  # shape: (train_batch_size * num_runs,)
+        # generated_tokens[:, i] = next_token
+
+        # # Generation by step
+        # for step in range(max_output_length):
+        #     hidden_states_combined = torch.zeros(
+        #         len(self.model_list),  # number of models
+        #         decoder_input_ids.size(0),  # train_batch_size * num_runs
+        #         decoder_input_ids.size(1),  # current decoded ids length
+        #         self.model_list[0].config.d_model,  # dimension of model hidden layers
+        #         dtype=torch.float,
+        #         device=self.device,
+        #     )
+
+        #     # Weighted combination of each model's hidden states
+        #     for model_idx, model in enumerate(self.model_list):
+        #         outputs = model(
+        #             input_ids=expanded_input_ids,
+        #             attention_mask=expanded_attention_mask,
+        #             decoder_input_ids=decoder_input_ids,
+        #             output_hidden_states=True,
+        #             return_dict=True,
+        #         )
+        #         hidden_states_combined[model_idx] = outputs.decoder_hidden_states[-1]
+
+        # mha_states = self.mha(hidden_states_combined)
+        # logits = self.lm_head(mha_states)  # shape: (num_heads, test_batch_size * num_runs, vocab_size)
+        # next_token = torch.argmax(logits[:, -1, :], dim=-1)  # shape: (test_batch_size * num_runs,)
+        # generated_tokens[:, step] = next_token
+        # # Update the decoder input
+        # decoder_input_ids = torch.cat([decoder_input_ids, next_token.unsqueeze(-1)], dim=1)
+
+        # # Check if all sequences have generated an end token
+        # if (next_token == self.model_list[0].config.eos_token_id).all():
+        #     break
+
+        return generated_tokens
 
 def config_scorer(meta_model, tokenizer, ref_model, device):
     # Setup optimizer and scaler
@@ -66,7 +212,7 @@ def meta_train(meta_model, tokenizer, train_dataloader, val_dataloader, optimize
 
             # meta_model forward pass
             meta_model.train()
-            generated_tokens = meta_model.forward(gen_input, num_runs, train_batch_size, max_output_length=64)
+            generated_tokens = meta_model.forward(gen_input, num_runs, train_batch_size, max_output_length=32)
 
             # Generate outputs
             generateds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
@@ -93,6 +239,7 @@ def meta_train(meta_model, tokenizer, train_dataloader, val_dataloader, optimize
                                           bandit=None, \
                                           chosen=None)
             total_scores = torch.FloatTensor(scorer_returns["total_scores"]).cuda()
+            print(f"Total scores: {total_scores}")
             batch_scores = total_scores.reshape(train_batch_size, num_runs)
             mean_scores = batch_scores.mean(dim=1)
             unlooped_mean_scores = torch.repeat_interleave(mean_scores, num_runs)
@@ -138,9 +285,8 @@ def main(model_name, data_path, lora_path, device, train_batch_size, val_batch_s
     # Initialize meta-learner
     meta_learner = MetaLearner(
         base_model=model,
-        n_heads=8,
+        n_heads=3,
         embed_dim=768,
-        num_models=3,
         feed_forward_hidden=512,
         normalization='batch',
         device='cuda'
