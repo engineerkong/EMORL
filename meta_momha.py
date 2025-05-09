@@ -3,8 +3,9 @@ import torch.nn as nn
 import copy
 from mha import MOMultiHeadAttentionLayer
 
+
 class MetaLearner(nn.Module):
-    def __init__(self, base_model, n_heads, embed_dim, num_models, feed_forward_hidden, normalization,
+    def __init__(self, base_model, n_heads, embed_dim, num_models, feed_forward_hidden, normalization, 
                 batch_size, num_runs, max_output_length, device, max_steps=100):
         super().__init__()
         self.base_model = base_model
@@ -21,37 +22,44 @@ class MetaLearner(nn.Module):
 
         # 使用分层模型融合替代简单的MHA
         self.hierarchical_fusion = self.HierarchicalModelFusion(
+            num_heads=self.n_heads, 
             hidden_dim=self.embed_dim, 
             num_models=self.num_models,  # 假设模型数量等于注意力头数
-            num_heads=self.n_heads, 
-            num_steps=max_steps,
+            feed_forward_hidden=self.feed_forward_hidden, 
+            normalization=self.normalization,
+            max_steps=max_steps,
             device=self.device
         )
         
         self.lm_head = self.base_model.lm_head
 
+    # 嵌入HierarchicalModelFusion类作为内部类
     class HierarchicalModelFusion(nn.Module):
-        def __init__(self, hidden_dim, num_models, num_heads=8, num_steps=64, device='cuda'):
-            super().__init__()
+        def __init__(self, num_heads, hidden_dim, num_models, feed_forward_hidden=512, 
+                    normalization='batch', max_steps=100, device='cuda'):
+            super().__init__()            
             # 第一层: 每个步骤内的模型融合
-            self.model_fusion = nn.MultiheadAttention(
+            self.model_fusion = MOMultiHeadAttentionLayer(
+                n_heads=num_models,
                 embed_dim=hidden_dim,
-                num_heads=num_models,
-                batch_first=True
+                feed_forward_hidden=feed_forward_hidden,
+                normalization=normalization
             ).to(device)
             
-            # 第二层: 跨步骤的信息融合
-            self.step_fusion = nn.MultiheadAttention(
+            # 第二层: 跨步骤的信息融合 - 使用单头注意力
+            self.step_fusion = MOMultiHeadAttentionLayer(
+                n_heads=1,
                 embed_dim=hidden_dim,
-                num_heads=num_heads,
-                batch_first=True
+                feed_forward_hidden=feed_forward_hidden,
+                normalization=normalization
             ).to(device)
             
-            # 位置编码(用于第二层)
-            self.position_encoding = nn.Parameter(
-                torch.zeros(1, num_steps, hidden_dim)  # 假设最大步骤数为100
-            ).to(device)
+            # 位置编码
+            self.position_encoding = nn.Parameter(torch.zeros(1, max_steps, hidden_dim)).to(device)
             nn.init.normal_(self.position_encoding, mean=0, std=0.02)
+            
+            # 输出投影层
+            self.output_projection = nn.Linear(hidden_dim, hidden_dim).to(device)
             
         def forward(self, hidden_states_combined):
             """
@@ -62,34 +70,28 @@ class MetaLearner(nn.Module):
             # 第一阶段: 按步骤融合模型
             per_step_fused = []
             for step_idx in range(num_steps):
-                # [num_models, batch_size, hidden_dim]
-                step_models = hidden_states_combined[step_idx, :, :, 0, :]
+                # 提取当前步骤的所有模型隐藏状态: [num_models, batch_size, hidden_dim]
+                step_models = hidden_states_combined[step_idx]
                 # 转置为[batch_size, num_models, hidden_dim]
-                step_models = step_models.permute(1, 0, 2)
-                # 模型内融合
-                fused, _ = self.model_fusion(
-                    query=step_models,
-                    key=step_models,
-                    value=step_models
-                )
-                # [batch_size, 1, hidden_dim]
+                # step_models = step_models.permute(1, 0, 2)
+                # 应用MHA融合
+                fused = self.model_fusion(step_models)
+                # 处理输出，得到 [batch_size, 1, hidden_dim]
                 fused = fused.mean(dim=1, keepdim=True)
                 per_step_fused.append(fused)
 
-            # [batch_size, num_steps, hidden_dim]
-            sequence_repr = torch.cat(per_step_fused, dim=1)
-            
-            # 添加位置编码
-            sequence_repr = sequence_repr + self.position_encoding[:, :num_steps, :]
-            # 第二阶段: 跨步骤融合
-            enhanced_sequence, _ = self.step_fusion(
-                query=sequence_repr,
-                key=sequence_repr,
-                value=sequence_repr
-            )
-            # 重塑为[num_steps, batch_size, 1, hidden_dim]
-            output = enhanced_sequence.transpose(0, 1).unsqueeze(2)
+            # 合并所有步骤的融合结果: [1, batch_size, num_steps, hidden_dim] 1, batch_size, num_steps, hidden_dim
+            sequence_repr = torch.cat(per_step_fused, dim=1).unsqueeze(0)
 
+            # 添加位置编码
+            sequence_repr = sequence_repr + self.position_encoding[:, :num_steps, :].view(1, 1, num_steps, -1)
+            # 第二阶段: 跨步骤融合
+            enhanced_sequence = self.step_fusion(sequence_repr)
+            # 应用输出投影
+            enhanced_sequence = self.output_projection(enhanced_sequence)
+            # 重塑为 [num_steps, batch_size, seq_len, hidden_dim]
+            output = enhanced_sequence.transpose(0, 1).unsqueeze(2)
+            
             return output
 
     def __call__(self, input_ids=None, attention_mask=None, labels=None, output_hidden_states=False, return_dict=True, **kwargs):
@@ -97,6 +99,7 @@ class MetaLearner(nn.Module):
         Makes MetaLearner compatible with the ReinforceCriterion by implementing 
         the expected forward interface of the language model.
         """
+        
         # 收集所有模型的隐藏状态
         hidden_states_list = []
         for model_idx, model in enumerate(self.model_list):

@@ -11,6 +11,7 @@ from tqdm import tqdm
 import copy
 import glob
 import wandb
+import numpy as np
 
 from meta_mha import MetaLearner
 from model_empathy import *
@@ -44,7 +45,7 @@ def config_scorer(meta_model, tokenizer, ref_model, device):
     objectives = ["reflection", "empathy", "fluency"]
     scorers = [get_scorer(obj) for obj in objectives]
     rl_crit = ReinforceCriterion(model=meta_model, tokenizer=tokenizer, optimizer=optimizer, scaler=scaler, ref_model=ref_model, kl_coeff=0.05)
-    scorer = ScorerWrapper(scorers, learning_mode="weighted", scoring_method="logsum", max_batch_size=12)
+    scorer = ScorerWrapper(scorers, learning_mode="weighted", scoring_method="fixed_logsum", max_batch_size=8)
 
     return optimizer, scaler, scorer, rl_crit
 
@@ -83,15 +84,17 @@ def meta_train(meta_model, tokenizer, train_dataloader, val_dataloader, optimize
             generateds = [ " ".join(g) for g in generateds]
             generateds = [ g.replace("<pad>", "").strip() for g in generateds]
             generateds = [g.replace("[CLS]", "").strip() for g in generateds]
-            gens_out = tokenizer(generateds, max_length=128, \
-                return_tensors="pt", padding="longest", truncation=True)["input_ids"]
+            gens_out = tokenizer(generateds, max_length=64, \
+                return_tensors="pt", padding="max_length", truncation=True)["input_ids"]
             prompts = [p for p in prompts for _ in range(num_runs)]
             responses = [r for r in responses for _ in range(num_runs)]
 
-            # Calculate scorers - kSCST
+            # Calculate scorers - kSCST/logsum
             scorer_returns = scorer.score(prompts, generateds, responses=responses, step_count=step_count, \
-                                          bandit=None, \
-                                          chosen=None)
+                                          bandit=None, chosen=None, extras={"reflection": 1/3, "empathy": 1/3, "fluency": 1/3})
+            print(f"Reflection: {np.mean(scorer_returns['reflection_scores'])}, \
+                    Empathy: {np.mean(scorer_returns['empathy_scores'])}, \
+                    Fluency: {np.mean(scorer_returns['fluency_scores'])}")
             total_scores = torch.FloatTensor(scorer_returns["total_scores"]).cuda()
             batch_scores = total_scores.reshape(train_batch_size, num_runs)
             mean_scores = batch_scores.mean(dim=1)
@@ -143,6 +146,9 @@ def main(model_name, data_path, lora_path, device, train_batch_size, val_batch_s
         num_models=3,
         feed_forward_hidden=512,
         normalization='batch',
+        batch_size=train_batch_size,
+        num_runs=num_runs,
+        max_output_length=64,
         device='cuda'
     )
     # Load LoRA updates
