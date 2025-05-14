@@ -33,12 +33,12 @@ class MetaLearner(nn.Module):
         
         self.lm_head = self.base_model.lm_head
 
-    # 嵌入HierarchicalModelFusion类作为内部类
+    
     class HierarchicalModelFusion(nn.Module):
         def __init__(self, num_heads, hidden_dim, num_models, feed_forward_hidden=512, 
                     normalization='batch', max_steps=100, device='cuda'):
             super().__init__()            
-            # 第一层: 每个步骤内的模型融合
+            # Layer 1: fusion models information in steps
             self.model_fusion = MOMultiHeadAttentionLayer(
                 n_heads=num_models,
                 embed_dim=hidden_dim,
@@ -46,7 +46,7 @@ class MetaLearner(nn.Module):
                 normalization=normalization
             ).to(device)
             
-            # 第二层: 跨步骤的信息融合 - 使用单头注意力
+            # Layer 2: fusion cross-steps information
             self.step_fusion = MOMultiHeadAttentionLayer(
                 n_heads=1,
                 embed_dim=hidden_dim,
@@ -54,11 +54,11 @@ class MetaLearner(nn.Module):
                 normalization=normalization
             ).to(device)
             
-            # 位置编码
+            # position encoding
             self.position_encoding = nn.Parameter(torch.zeros(1, max_steps, hidden_dim)).to(device)
             nn.init.normal_(self.position_encoding, mean=0, std=0.02)
             
-            # 输出投影层
+            # output projection layer
             self.output_projection = nn.Linear(hidden_dim, hidden_dim).to(device)
             
         def forward(self, hidden_states_combined):
