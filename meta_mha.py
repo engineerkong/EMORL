@@ -82,13 +82,11 @@ class MetaLearner(nn.Module):
             # 添加位置编码
             sequence_repr = sequence_repr + self.position_encoding[:, :num_steps, :]
             # 第二阶段: 跨步骤融合
-            enhanced_sequence, _ = self.step_fusion(
+            output, _ = self.step_fusion(
                 query=sequence_repr,
                 key=sequence_repr,
                 value=sequence_repr
             )
-            # 重塑为[num_steps, batch_size, 1, hidden_dim]
-            output = enhanced_sequence.transpose(0, 1).unsqueeze(2)
 
             return output
 
@@ -118,7 +116,6 @@ class MetaLearner(nn.Module):
         hidden_states_combined = all_models_hidden_states.permute(1, 0, 2, 3, 4)
         # 应用层次融合
         fused_states = self.hierarchical_fusion(hidden_states_combined)
-        fused_states = fused_states.permute(1, 0, 2, 3).squeeze(2)  # [batch_size, num_steps, hidden_dim]
         logits = self.lm_head(fused_states)
         # Create a structure similar to what the base model would return
         from dataclasses import dataclass
@@ -170,7 +167,6 @@ class MetaLearner(nn.Module):
         hidden_states_combined = all_models_hidden_states.permute(1, 0, 2, 3, 4)
         # 应用层次融合
         fused_states = self.hierarchical_fusion(hidden_states_combined)
-        fused_states = fused_states.permute(1, 0, 2, 3).squeeze(2)  # [batch_size, num_steps, hidden_dim]
         logits = self.lm_head(fused_states)
         # 生成输出
         generated_tokens = torch.argmax(logits, dim=-1).squeeze(-1)

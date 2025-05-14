@@ -13,7 +13,7 @@ import glob
 import wandb
 import numpy as np
 
-from meta_mha import MetaLearner
+from meta_momha import MetaLearner
 from model_empathy import *
 from dynaopt_lib import *
 from utils_lora import *
