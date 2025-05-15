@@ -13,7 +13,7 @@ import glob
 import wandb
 import numpy as np
 
-from meta_momha import MetaLearner
+from meta_head import MetaLearner
 from model_empathy import *
 from dynaopt_lib import *
 from utils_lora import *
@@ -66,7 +66,6 @@ def meta_train(meta_model, tokenizer, train_dataloader, val_dataloader, optimize
             gen_input = {k: v.to(device) for k, v in gen_input.items()}
 
             # meta_model forward pass
-            meta_model.train()
             generated_tokens = meta_model.forward(gen_input, num_runs, train_batch_size, max_output_length=64)
 
             # Generate outputs
@@ -104,6 +103,8 @@ def meta_train(meta_model, tokenizer, train_dataloader, val_dataloader, optimize
             # Calculate loss with KL penalty
             loss = rl_crit(prompts, gens_out, normalized_rewards)
 
+            initial_params = {name: copy.deepcopy(param.data) for name, param in meta_model.named_parameters()}
+
             # Backward pass and optimization
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -111,7 +112,13 @@ def meta_train(meta_model, tokenizer, train_dataloader, val_dataloader, optimize
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
-            
+
+            for name, param in meta_model.named_parameters():
+                if torch.equal(initial_params[name], param.data):
+                    print(f"Parameters not updated: {name}")
+                else:
+                    print(f"Parameters updated: {name} | Update: {torch.norm(param.data - initial_params[name]):.6f}")
+
             # Update step_count when one batch is finished
             step_count += 1
 
@@ -151,6 +158,7 @@ def main(model_name, data_path, lora_path, device, train_batch_size, val_batch_s
         max_output_length=64,
         device='cuda'
     )
+    meta_learner.train()
     # Load LoRA updates
     pattern = os.path.join(lora_path, f"lora_*.npz")
     matching_files = glob.glob(pattern)
@@ -159,7 +167,7 @@ def main(model_name, data_path, lora_path, device, train_batch_size, val_batch_s
         print(f"Loading LoRA parameters from {matching_file}")
         lora_params = load_lora(matching_file)
         lora_updates.append(lora_params)
-    meta_learner.config_models(lora_updates)
+    meta_learner.config_models(model, lora_updates)
 
     # Define generation parameters
     gen_params = {
@@ -182,12 +190,12 @@ if __name__ == "__main__":
     # Default configurations
     model_name = "google-t5/t5-base"
     data_path = "data/PAIR/pair_data.csv"
-    lora_path = "lora_results/results_example"
+    lora_path = "lora_results/20250409_2050"
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    train_batch_size = 8
+    train_batch_size = 16
     val_batch_size = 8
     val_interval_size = 8
     num_runs = 3
-    num_steps = 1000
+    num_steps = 10000
 
     main(model_name, data_path, lora_path, device, train_batch_size, val_batch_size, val_interval_size, num_runs, num_steps)
